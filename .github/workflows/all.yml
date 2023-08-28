@@ -1,0 +1,104 @@
+# This workflow contains the most common jobs that are used in the CI of the k6's extensions.
+# We created it to maintain the same standards that has the k6's core.
+name: Extension Check
+on:
+  # actually makes this workflow re-usable
+  workflow_call:
+  # Enable manually triggering this workflow via the API or web UI
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Install Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.21.x
+      - name: Check dependencies
+        run: |
+            go version
+            test -z "$(go mod tidy  && git status --porcelain)"
+            go mod verify
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Run k6's golangci-lint CI
+        uses: grafana/k6/.github/actions/lint@master
+
+  test-go-versions:
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: [1.20.x, 1.21.x, tip]
+        platform: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Install Go ${{ matrix.go-version }}
+        if: matrix.go-version != 'tip'
+        uses: actions/setup-go@v3
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Install Go stable
+        if: matrix.go-version == 'tip'
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.x
+      - name: Install Go tip
+        shell: bash
+        if: matrix.go-version == 'tip'
+        run: |
+          go install golang.org/dl/gotip@latest
+          gotip download
+          echo "GOROOT=$HOME/sdk/gotip" >> "$GITHUB_ENV"
+          echo "GOPATH=$HOME/go" >> "$GITHUB_ENV"
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          echo "$HOME/sdk/gotip/bin" >> "$GITHUB_PATH"
+      - name: Run tests
+        run: |
+          which go
+          go version
+          go test -race -timeout 800s ./...
+
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Install Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.21.x
+      - name: Check build
+        run: |
+          go version
+          pwd && ls -l
+
+          go install go.k6.io/xk6/cmd/xk6@master
+          MODULE_NAME=`go list -m`
+
+          GOPRIVATE="go.k6.io/k6" xk6 build \
+            --output ./k6ext \
+            --with $MODULE_NAME="."
+          ./k6ext version
