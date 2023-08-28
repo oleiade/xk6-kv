@@ -40,6 +40,7 @@ export default async function () {
     await kv.set("abc", 123);
     await kv.set("easy as", [1, 2, 3]);
     await kv.set("a b c", { "123": "baby you and me girl"});
+
     console.log(`current size of the KV store: ${kv.size()}`)
 
     const entries = await kv.list({ prefix: "a" });
@@ -47,7 +48,7 @@ export default async function () {
         console.log(`found entry: ${JSON.stringify(entry)}`);
     }
 
-    await kv.del("foo");
+    await kv.delete("foo");
 }
 ```
 
