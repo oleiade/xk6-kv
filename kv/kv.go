@@ -164,7 +164,7 @@ func (k *KV) Delete(key goja.Value) *goja.Promise {
 // The returned list can be limited to a maximum number of entries by passing a limit option.
 // The returned list can be limited to keys that start with a given prefix by passing a prefix option.
 // See [ListOptions] for more details
-func (k *KV) List(options *goja.Object) *goja.Promise {
+func (k *KV) List(options goja.Value) *goja.Promise {
 	promise, resolve, reject := promises.New(k.vu)
 
 	listOptions := ImportListOptions(k.vu.Runtime(), options)
@@ -233,13 +233,21 @@ type ListOptions struct {
 // ErrStop is used to stop a BoltDB iteration.
 var ErrStop = errors.New("stop")
 
-// ImportListOptions instantiates a ListOptions from a goj.Object.
-func ImportListOptions(rt *goja.Runtime, options *goja.Object) ListOptions {
+// ImportListOptions instantiates a ListOptions from a goja.Value.
+func ImportListOptions(rt *goja.Runtime, options goja.Value) ListOptions {
 	listOptions := ListOptions{}
 
-	listOptions.Prefix = options.Get("prefix").String()
+	// If no options are passed, return the default options
+	if common.IsNullish(options) {
+		return listOptions
+	}
 
-	limitValue := options.Get("limit")
+	// Interpret the options as an object
+	optionsObj := options.ToObject(rt)
+
+	listOptions.Prefix = optionsObj.Get("prefix").String()
+
+	limitValue := optionsObj.Get("limit")
 	if limitValue == nil {
 		return listOptions
 	}
