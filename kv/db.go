@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -10,6 +11,7 @@ import (
 // db is a wrapper around bolt.DB that keeps track of the number of references
 // to the database and closes the database when the last reference is closed.
 type db struct {
+	path     string
 	handle   *bolt.DB
 	opened   atomic.Bool
 	refCount atomic.Int64
@@ -19,6 +21,7 @@ type db struct {
 // newDB returns a new db instance.
 func newDB() *db {
 	return &db{
+		path:     DefaultKvPath,
 		handle:   new(bolt.DB),
 		opened:   atomic.Bool{},
 		refCount: atomic.Int64{},
@@ -43,7 +46,19 @@ func (db *db) open() error {
 		return nil
 	}
 
-	handler, err := bolt.Open(DefaultKvPath, 0o600, nil)
+	handler, err := bolt.Open(db.path, 0o600, nil)
+	if err != nil {
+		return err
+	}
+
+	err = handler.Update(func(tx *bolt.Tx) error {
+		_, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
+		if bucketErr != nil {
+			return fmt.Errorf("failed to create internal bucket: %w", bucketErr)
+		}
+
+		return nil
+	})
 	if err != nil {
 		return err
 	}
