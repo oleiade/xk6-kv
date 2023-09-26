@@ -78,5 +78,5 @@ func TestDbClose(t *testing.T) {
 }
 
 func randomFileName(prefix, suffix string) string {
-	return prefix + fmt.Sprint(rand.Intn(100)) + suffix
+	return prefix + fmt.Sprint(rand.Intn(100)) + suffix //nolint:gosec
 }
