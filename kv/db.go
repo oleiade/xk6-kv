@@ -77,6 +77,7 @@ func (db *db) close() error {
 			return err
 		}
 
+		db.handle = nil
 		db.opened.Store(false)
 	}
 
