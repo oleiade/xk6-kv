@@ -1,6 +1,8 @@
 package kv
 
 import (
+	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,7 +27,7 @@ func TestDbOpen(t *testing.T) {
 	// Create a new db instance and
 	// override the default path for testing purposes
 	dbInstance := newDB()
-	dbInstance.path = filepath.Join(tmpDir, "test.db")
+	dbInstance.path = filepath.Join(tmpDir, randomFileName("test.", ".db"))
 
 	// Test that calling open on a new db instance successfully opens the database.
 	assert.NoError(t, dbInstance.open())
@@ -59,7 +61,7 @@ func TestDbClose(t *testing.T) {
 
 	// Initialize a new db instance and open it
 	dbInstance := newDB()
-	dbInstance.path = filepath.Join(tmpDir, "test.db")
+	dbInstance.path = filepath.Join(tmpDir, randomFileName("test.", ".db"))
 	require.NoError(t, dbInstance.open())
 
 	// 3. If the reference count is more than one and close is called, the database should not actually close.
@@ -73,4 +75,8 @@ func TestDbClose(t *testing.T) {
 	require.NoError(t, dbInstance.close())
 	require.False(t, dbInstance.opened.Load())
 	require.Equal(t, int64(0), dbInstance.refCount.Load())
+}
+
+func randomFileName(prefix, suffix string) string {
+	return prefix + fmt.Sprint(rand.Intn(100)) + suffix
 }
