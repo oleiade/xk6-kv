@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dop251/goja"
+	"github.com/grafana/sobek"
 	bolt "go.etcd.io/bbolt"
 	"go.k6.io/k6/js/common"
 	"go.k6.io/k6/js/modules"
@@ -43,7 +43,7 @@ func NewKV(vu modules.VU, db *db) *KV {
 // Set sets the value of a key in the store.
 //
 // If the key does not exist, it is created. If the key already exists, its value is overwritten.
-func (k *KV) Set(key goja.Value, value goja.Value) *goja.Promise {
+func (k *KV) Set(key sobek.Value, value sobek.Value) *sobek.Promise {
 	promise, resolve, reject := promises.New(k.vu)
 
 	// Convert the key to a byte slice
@@ -81,7 +81,7 @@ func (k *KV) Set(key goja.Value, value goja.Value) *goja.Promise {
 }
 
 // Get returns the value of a key in the store.
-func (k *KV) Get(key goja.Value) *goja.Promise {
+func (k *KV) Get(key sobek.Value) *sobek.Promise {
 	promise, resolve, reject := promises.New(k.vu)
 
 	// Convert the key to a byte slice
@@ -128,7 +128,7 @@ func (k *KV) Get(key goja.Value) *goja.Promise {
 }
 
 // Delete deletes a key from the store.
-func (k *KV) Delete(key goja.Value) *goja.Promise {
+func (k *KV) Delete(key sobek.Value) *sobek.Promise {
 	promise, resolve, reject := promises.New(k.vu)
 
 	keyBytes, err := common.ToBytes(key.Export())
@@ -164,7 +164,7 @@ func (k *KV) Delete(key goja.Value) *goja.Promise {
 // The returned list can be limited to a maximum number of entries by passing a limit option.
 // The returned list can be limited to keys that start with a given prefix by passing a prefix option.
 // See [ListOptions] for more details
-func (k *KV) List(options goja.Value) *goja.Promise {
+func (k *KV) List(options sobek.Value) *sobek.Promise {
 	promise, resolve, reject := promises.New(k.vu)
 
 	listOptions := ImportListOptions(k.vu.Runtime(), options)
@@ -233,8 +233,8 @@ type ListOptions struct {
 // ErrStop is used to stop a BoltDB iteration.
 var ErrStop = errors.New("stop")
 
-// ImportListOptions instantiates a ListOptions from a goja.Value.
-func ImportListOptions(rt *goja.Runtime, options goja.Value) ListOptions {
+// ImportListOptions instantiates a ListOptions from a sobek.Value.
+func ImportListOptions(rt *sobek.Runtime, options sobek.Value) ListOptions {
 	listOptions := ListOptions{}
 
 	// If no options are passed, return the default options
@@ -263,7 +263,7 @@ func ImportListOptions(rt *goja.Runtime, options goja.Value) ListOptions {
 }
 
 // Clear deletes all the keys in the store.
-func (k *KV) Clear() *goja.Promise {
+func (k *KV) Clear() *sobek.Promise {
 	promise, resolve, reject := promises.New(k.vu)
 
 	go func() {
@@ -289,7 +289,7 @@ func (k *KV) Clear() *goja.Promise {
 }
 
 // Size returns the number of keys in the store.
-func (k *KV) Size() *goja.Promise {
+func (k *KV) Size() *sobek.Promise {
 	promise, resolve, reject := promises.New(k.vu)
 
 	go func() {

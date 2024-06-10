@@ -8,7 +8,7 @@
 package kv
 
 import (
-	"github.com/dop251/goja"
+	"github.com/grafana/sobek"
 	"go.k6.io/k6/js/common"
 	"go.k6.io/k6/js/modules"
 )
@@ -59,12 +59,12 @@ func (mi *ModuleInstance) Exports() modules.Exports {
 
 // NewKV implements the modules.Instance interface and returns
 // a new KV instance.
-func (mi *ModuleInstance) NewKV(_ goja.ConstructorCall) *goja.Object {
+func (mi *ModuleInstance) NewKV(_ sobek.ConstructorCall) *sobek.Object {
 	return mi.vu.Runtime().ToValue(mi.kv).ToObject(mi.vu.Runtime())
 }
 
 // OpenKv opens the KV store and returns a KV instance.
-func (mi *ModuleInstance) OpenKv() *goja.Object {
+func (mi *ModuleInstance) OpenKv() *sobek.Object {
 	if err := mi.rm.db.open(); err != nil {
 		common.Throw(mi.vu.Runtime(), err)
 		return nil
