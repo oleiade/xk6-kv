@@ -42,8 +42,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Run k6's golangci-lint CI
-        uses: grafana/k6/.github/actions/lint@master
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
 
   test-go-versions:
     strategy:
