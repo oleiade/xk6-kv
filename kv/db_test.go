@@ -3,7 +3,6 @@ package kv
 import (
 	"fmt"
 	"math/rand"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -12,17 +11,11 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-//nolint:forbidigo
 func TestDbOpen(t *testing.T) {
 	t.Parallel()
 
 	// Create a temporary directory for the database
-	tmpDir, err := os.MkdirTemp("", "kvtest")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		removeErr := os.RemoveAll(tmpDir)
-		require.NoError(t, removeErr)
-	})
+	tmpDir := t.TempDir()
 
 	t.Run("calling open on a new db instance successfully opens the database", func(t *testing.T) {
 		t.Parallel()
@@ -94,16 +87,11 @@ func TestDbOpen(t *testing.T) {
 	})
 }
 
-//nolint:forbidigo
 func TestDbClose(t *testing.T) {
 	t.Parallel()
 
 	// Create a temporary directory for the database
-	tmpDir, err := os.MkdirTemp("", "kvtest")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(tmpDir))
-	})
+	tmpDir := t.TempDir()
 
 	t.Run("1", func(t *testing.T) {
 		t.Parallel()
