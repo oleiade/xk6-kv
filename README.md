@@ -1,28 +1,60 @@
-# Key-Value Store Extension for k6
+# xk6-kv
 
-`xk6-kv` is a k6 extension that provides a persistent key-value store, enabling shared state across VUs during script execution. This store is persisted to disk as a single file. The extension module offers a high-read optimized store with support for up to 10,000 writes/s.
+[![Go Report Card](https://goreportcard.com/badge/github.com/oleiade/xk6-kv)](https://goreportcard.com/report/github.com/oleiade/xk6-kv)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
+A k6 extension providing a persistent key-value store for sharing state across Virtual Users (VUs) during load testing.
+
+## Table of Contents
+- [Features](#features)
+- [Why Use xk6-kv](#why-use-xk6-kv)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [API Reference](#api-reference)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
 
 ## Features
 
-- **Persistent Storage**: Maintains a disk-persisted key-value store.
-- **Shared Across VUs**: Perfect for sharing state across VUs in your k6 scripts.
-- **High-Read Optimized**: While it excels in read operations, it's also capable of supporting up to 10,000 writes/s.
+- 🔄 **Persistent Storage**: Data persists across test runs via disk storage
+- 🚀 **High Performance**: Optimized for reads with support for up to 10,000 writes/s
+- 🔒 **Thread-Safe**: Secure state sharing across Virtual Users
+- 🪶 **Lightweight**: No external dependencies required
+- 🔌 **Easy Integration**: Simple API that works seamlessly with k6
 
 ## Why Use xk6-kv?
 
-**Ease of State Sharing**: Managing state across multiple VUs can be challenging. **xk6-kv** alleviates this complexity by offering a straightforward way to share state, ensuring that your scripting remains as seamless as possible.
+- **State Sharing Made Simple**: Managing state across multiple VUs in k6 can be challenging. **xk6-kv** provides a straightforward solution for sharing state, making your load testing scripts cleaner and more maintainable.
+- **Built for Safety**: Thread safety is crucial in load testing. **xk6-kv** is designed specifically for k6's parallel VU execution model, ensuring your shared state operations remain safe and reliable.
+- **Lightweight Alternative**: While other solutions like Redis exist and are compatible with k6 for state sharing, **xk6-kv** offers a more lightweight, integrated approach:
+    - No external services required
+    - Simple setup and configuration
 
-**Safety First**: One of the primary concerns with shared state is ensuring thread safety. With **xk6-kv**, you can be confident that your shared state operations are safe, thanks to its design optimized for k6's parallel VU execution model.
-
-**Lightweight Alternative**: While there are other options like the redis module for state sharing, **xk6-kv** stands out as a more lightweight solution. It's particularly useful if you're looking for a simpler and more integrated solution without external dependencies. Though keep in mind that for extremely high-performance requirements, the redis module may offer better throughput, but for many users, **xk6-kv** will be more than sufficient.
+> **Note**: For extremely high-performance requirements, consider using the k6 Redis module instead.
 
 ## Installation
-To use `xk6-kv`, you first need to build `k6` with it:
+
+1. First, ensure you have [xk6](https://github.com/grafana/xk6) installed:
+```bash
+go install go.k6.io/xk6/cmd/xk6@latest
 ```
+
+2. Build a k6 binary with the xk6-kv extension:
+```bash
 xk6 build --with github.com/oleiade/xk6-kv
 ```
 
-## Usage
+3. Import the kv module in your script, at the top of your test script:
+```javascript
+import { openKv } from "k6/x/kv";
+```
+
+4. The built binary will be in your current directory. You can move it to your PATH or use it directly:
+```bash
+./k6 run script.js
+```
+
+## Quick Start
 
 ```javascript
 import { openKv } from "k6/x/kv";
@@ -30,12 +62,12 @@ import { openKv } from "k6/x/kv";
 const kv = openKv();
 
 export async function setup() {
-    // (optional) Clear the key-value store to start from a clean state
+    // Start with a clean state
     await kv.clear();
 }
 
 export default async function () {
-    // Set a bunch of keys
+        // Set a bunch of keys
     await kv.set("foo", "bar");
     await kv.set("abc", 123);
     await kv.set("easy as", [1, 2, 3]);
@@ -52,15 +84,61 @@ export default async function () {
 }
 ```
 
-## API Documentation
+## API Reference
 
-- `openKv(): KV`: Opens a key-value store persisted on disk. Should be called only in the init context.
-- `KV.set(key: string, value: any): Promise<any>`: Sets a key-value pair in the store. Accepts any JSON-serializable value.
-- `KV.get(key: string): Promise<any>`: Retrieves a value based on its key. If the key doesn't exist, an error is thrown.
-- `KV.delete(key: string)`: Removes a specific key-value pair from the store.
-- `KV.list(options: ListOptions)`: Returns key-value pairs from the store filtered by the provided options.
-- `KV.clear()`: Removes all key-value pairs from the store. Useful when starting with a clean state, e.g., in the setup() function.
-- `KV.size()`: Provides the count of key-value pairs currently in the store.
-- `ListOptions` interface, used in `KV.list()`, it includes:
-    - `prefix: string`: Filters results to keys that have the specified prefix.
-    - `limit`: number: Restricts results to a maximum count.
+### Core Functions
+
+#### `openKv(): KV`
+Opens a key-value store persisted on disk. Must be called in the init context.
+
+#### KV Methods
+- `set(key: string, value: any): Promise<any>`
+  - Sets a key-value pair. Accepts any JSON-serializable value.
+  
+- `get(key: string): Promise<any>`
+  - Retrieves a value by key. Throws if key doesn't exist.
+  
+- `delete(key: string): Promise<void>`
+  - Removes a key-value pair.
+  
+- `list(options: ListOptions): Promise<Array<Entry>>`
+  - Returns filtered key-value pairs.
+  
+- `clear(): Promise<void>`
+  - Removes all entries.
+  
+- `size(): number`
+  - Returns current store size.
+
+### ListOptions Interface
+```typescript
+interface ListOptions {
+    prefix?: string;  // Filter by key prefix
+    limit?: number;   // Max number of results
+}
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### **"Error: key not found"**
+   - Ensure the key exists before attempting to get it
+   - Use error handling:
+   ```javascript
+   try {
+       const value = await kv.get("myKey");
+   } catch (e) {
+       console.error("Key not found:", e);
+   }
+   ```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
