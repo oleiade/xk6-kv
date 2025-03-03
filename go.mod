@@ -1,13 +1,13 @@
 module github.com/oleiade/xk6-kv
 
-go 1.22
+go 1.23
 
-toolchain go1.23.4
+toolchain go1.24.0
 
 require (
 	github.com/grafana/sobek v0.0.0-20241024150027-d91f02b05e9b
 	github.com/stretchr/testify v1.10.0
-	go.etcd.io/bbolt v1.3.7
+	go.etcd.io/bbolt v1.4.0
 	go.k6.io/k6 v0.57.0
 )
 
