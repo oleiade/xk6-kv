@@ -71,7 +71,11 @@ export default async function () {
     await kv.set("foo", "bar");
     await kv.set("abc", 123);
     await kv.set("easy as", [1, 2, 3]);
-    await kv.set("a b c", { "123": "baby you and me girl"});
+
+    const abcExists = await kv.exists("a b c")
+    if (!abcExists) {
+      await kv.set("a b c", { "123": "baby you and me girl"});
+    }
 
     console.log(`current size of the KV store: ${kv.size()}`)
 
@@ -100,6 +104,9 @@ Opens a key-value store persisted on disk. Must be called in the init context.
   
 - `delete(key: string): Promise<void>`
   - Removes a key-value pair.
+
+- `exists(key: string): Promise<boolean>`
+  - Checks if a given key exists.
   
 - `list(options: ListOptions): Promise<Array<Entry>>`
   - Returns filtered key-value pairs.
@@ -117,21 +124,6 @@ interface ListOptions {
     limit?: number;   // Max number of results
 }
 ```
-
-## Troubleshooting
-
-### Common Issues
-
-#### **"Error: key not found"**
-   - Ensure the key exists before attempting to get it
-   - Use error handling:
-   ```javascript
-   try {
-       const value = await kv.get("myKey");
-   } catch (e) {
-       console.error("Key not found:", e);
-   }
-   ```
 
 ## Contributing
 
