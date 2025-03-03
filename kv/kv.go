@@ -273,7 +273,7 @@ func (k *KV) Clear() *sobek.Promise {
 				return NewError(BucketNotFoundError, "bucket "+string(k.bucket)+" not found")
 			}
 
-			return bucket.ForEach(func(k, v []byte) error {
+			return bucket.ForEach(func(k, _ []byte) error {
 				return bucket.Delete(k)
 			})
 		})

@@ -1,6 +1,6 @@
 module github.com/oleiade/xk6-kv
 
-go 1.20
+go 1.22
 
 require (
 	github.com/grafana/sobek v0.0.0-20240607083612-4f0cd64f4e78
