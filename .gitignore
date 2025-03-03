@@ -19,3 +19,9 @@
 
 # Go workspace file
 go.work
+
+# Ignore xk6 built binary
+./k6
+
+# Ignore k6-kv database files
+./k6-kv
