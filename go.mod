@@ -5,7 +5,7 @@ go 1.23
 toolchain go1.24.0
 
 require (
-	github.com/grafana/sobek v0.0.0-20241024150027-d91f02b05e9b
+	github.com/grafana/sobek v0.0.0-20250219104821-ed22af7a8d6c
 	github.com/stretchr/testify v1.10.0
 	go.etcd.io/bbolt v1.4.0
 	go.k6.io/k6 v0.57.0
