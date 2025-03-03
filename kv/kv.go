@@ -157,6 +157,38 @@ func (k *KV) Delete(key sobek.Value) *sobek.Promise {
 	return promise
 }
 
+// Exists checks if a given key exists.
+func (k *KV) Exists(key sobek.Value) *sobek.Promise {
+	promise, resolve, reject := promises.New(k.vu)
+
+	keyBytes, err := common.ToBytes(key.Export())
+	if err != nil {
+		reject(err)
+		return promise
+	}
+
+	go func() {
+		exists := false
+		err := k.db.handle.View(func(tx *bolt.Tx) error {
+			bucket := tx.Bucket(k.bucket)
+			if bucket == nil {
+				return NewError(BucketNotFoundError, "bucket "+string(k.bucket)+" not found")
+			}
+
+			exists = bucket.Get(keyBytes) != nil
+			return nil
+		})
+		if err != nil {
+			reject(err)
+			return
+		}
+
+		resolve(exists)
+	}()
+
+	return promise
+}
+
 // List returns all the key-value pairs in the store.
 //
 // The returned list is ordered lexicographically by key.
