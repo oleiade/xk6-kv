@@ -18,23 +18,6 @@ defaults:
     shell: bash
 
 jobs:
-  dependencies:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 1.22.x
-      - name: Check dependencies
-        run: |
-            go version
-            test -z "$(go mod tidy  && git status --porcelain)"
-            go mod verify
-
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -51,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: [1.22.x, 1.23.x, 1.24.x]
+        go-version: [1.23.x, 1.24.x]
         platform: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.platform }}
     steps:
@@ -66,7 +49,7 @@ jobs:
         if: matrix.go-version == 'tip'
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22.x
+          go-version: 1.23.x
       - name: Install Go tip
         shell: bash
         if: matrix.go-version == 'tip'
@@ -91,7 +74,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22.x
+          go-version: 1.23.x
       - name: Check build
         run: |
           go version

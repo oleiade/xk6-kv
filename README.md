@@ -16,16 +16,18 @@ A k6 extension providing a persistent key-value store for sharing state across V
 
 ## Features
 
-- 🔄 **Persistent Storage**: Data persists across test runs via disk storage
-- 🚀 **High Performance**: Optimized for reads with support for up to 10,000 writes/s
 - 🔒 **Thread-Safe**: Secure state sharing across Virtual Users
-- 🪶 **Lightweight**: No external dependencies required
 - 🔌 **Easy Integration**: Simple API that works seamlessly with k6
+- 🔄 **Flexible Storage**: Choose between in-memory or disk-based persistence
+- 🪶 **Lightweight**: No external dependencies required
 
 ## Why Use xk6-kv?
 
 - **State Sharing Made Simple**: Managing state across multiple VUs in k6 can be challenging. **xk6-kv** provides a straightforward solution for sharing state, making your load testing scripts cleaner and more maintainable.
 - **Built for Safety**: Thread safety is crucial in load testing. **xk6-kv** is designed specifically for k6's parallel VU execution model, ensuring your shared state operations remain safe and reliable.
+- **Storage Options**: Choose the backend that fits your needs:
+  - **Memory**: Fast, ephemeral storage that's shared across VUs
+  - **Disk**: Persistent storage using BoltDB for data that needs to survive between test runs
 - **Lightweight Alternative**: While other solutions like Redis exist and are compatible with k6 for state sharing, **xk6-kv** offers a more lightweight, integrated approach:
     - No external services required
     - Simple setup and configuration
@@ -54,12 +56,17 @@ import { openKv } from "k6/x/kv";
 ./k6 run script.js
 ```
 
-## Quick Start
+## Quickstart
 
 ```javascript
 import { openKv } from "k6/x/kv";
 
+// Open a key-value store with the default backend (disk)
 const kv = openKv();
+
+// Or specify a backend explicitly
+// const kv = openKv({ backend: "disk" });   // Disk-based persistent backend (default)
+// const kv = openKv({ backend: "memory" }); // In-memory backend
 
 export async function setup() {
     // Start with a clean state
@@ -88,12 +95,29 @@ export default async function () {
 }
 ```
 
+
 ## API Reference
 
 ### Core Functions
 
-#### `openKv(): KV`
-Opens a key-value store persisted on disk. Must be called in the init context.
+#### `openKv(options?: OpenKvOptions): KV`
+Opens a key-value store with the specified backend. Must be called in the init context.
+
+```typescript
+interface OpenKvOptions {
+    backend?: "memory" | "disk"; // Default is "memory"
+}
+```
+
+- **memory**: In-memory backend that's fast and shared across all VUs (default)
+- **disk**: Persistent BoltDB-based backend that survives between test runs
+
+#### Performance Considerations
+
+While both backends are optimized for performance and suitable for most load testing scenarios, be aware that:
+- There is some overhead due to synchronization between VUs
+- Consider this overhead when analyzing your test results
+- For extremely high throughput requirements, you might need alternative solutions
 
 #### KV Methods
 - `set(key: string, value: any): Promise<any>`
@@ -122,6 +146,66 @@ Opens a key-value store persisted on disk. Must be called in the init context.
 interface ListOptions {
     prefix?: string;  // Filter by key prefix
     limit?: number;   // Max number of results
+}
+```
+
+## Examples
+
+A common use case for xk6-kv is sharing state between VUs for workflows such as producer-consumer patterns or rendez-vous points. The following example demonstrates a producer-consumer workflow where one VU produces tokens and another consumes them, coordinating through the shared key-value store.
+
+```javascript
+import { sleep } from "k6";
+import { openKv } from "k6/x/kv";
+
+export let options = {
+  scenarios: {
+    producer: {
+      executor: "shared-iterations",
+      vus: 1,
+      iterations: 10,
+      exec: "producer",
+    },
+    consumer: {
+      executor: "shared-iterations",
+      vus: 1,
+      iterations: 10,
+      startTime: "5s",
+      exec: "consumer",
+    },
+  },
+};
+
+const kv = openKv({ backend: "memory" });
+
+export async function producer() {
+  let latestProducerID = 0;
+  if (await kv.exists(`latest-producer-id`)) {
+    latestProducerID = await kv.get(`latest-producer-id`);
+  }
+
+  console.log(`[producer]-> adding token ${latestProducerID}`);
+  await kv.set(`token-${latestProducerID}`, "token-value");
+  await kv.set(`latest-producer-id`, latestProducerID + 1);
+
+  // Let's simulate a delay between producing tokens
+  sleep(1);
+}
+
+export async function consumer() {
+  console.log("[consumer]<- waiting for next token");
+
+  // Let's list the existing tokens, and consume the first we find
+  const entries = await kv.list({ prefix: "token-" });
+  if (entries.length > 0) {
+    await kv.get(entries[0].key);
+    console.log(`[consumer]<- consumed token ${entries[0].key}`);
+    await kv.delete(entries[0].key);
+  } else {
+    console.log("[consumer]<- no tokens available");
+  }
+
+  // Let's simulate a delay between consuming tokens
+  sleep(1);
 }
 ```
 
