@@ -1,3 +1,6 @@
+//go:build !windows
+// +build !windows
+
 package store
 
 import (
@@ -30,7 +33,6 @@ func TestNewDiskStore(t *testing.T) {
 func TestDiskStore_Get(t *testing.T) {
 	t.Parallel()
 
-	// Create a temporary file for testing
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
@@ -71,12 +73,14 @@ func TestDiskStore_Get(t *testing.T) {
 func TestDiskStore_Set(t *testing.T) {
 	t.Parallel()
 
-	// Create a temporary file for testing
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
 	store := NewDiskStore()
 	store.path = tempFile
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
 
 	// Test setting a string value
 	err := store.Set("string-key", "string-value")
@@ -122,9 +126,6 @@ func TestDiskStore_Set(t *testing.T) {
 	if err == nil {
 		t.Fatal("Set() with unsupported value type should return an error")
 	}
-
-	// Clean up
-	_ = store.Close()
 }
 
 func TestDiskStore_Delete(t *testing.T) {
@@ -136,6 +137,9 @@ func TestDiskStore_Delete(t *testing.T) {
 
 	store := NewDiskStore()
 	store.path = tempFile
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
 
 	// Setup
 	err := store.Set("test-key", "test-value")
@@ -163,9 +167,6 @@ func TestDiskStore_Delete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Delete() on non-existent key returned an error: %v", err)
 	}
-
-	// Clean up
-	_ = store.Close()
 }
 
 func TestDiskStore_Exists(t *testing.T) {
@@ -177,6 +178,9 @@ func TestDiskStore_Exists(t *testing.T) {
 
 	store := NewDiskStore()
 	store.path = tempFile
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
 
 	// Test with non-existent key
 	exists, err := store.Exists("non-existent")
@@ -200,9 +204,6 @@ func TestDiskStore_Exists(t *testing.T) {
 	if !exists {
 		t.Fatal("Exists() returned false for an existing key")
 	}
-
-	// Clean up
-	_ = store.Close()
 }
 
 func TestDiskStore_Clear(t *testing.T) {
@@ -214,6 +215,9 @@ func TestDiskStore_Clear(t *testing.T) {
 
 	store := NewDiskStore()
 	store.path = tempFile
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
 
 	// Setup
 	err := store.Set("key1", "value1")
@@ -239,9 +243,6 @@ func TestDiskStore_Clear(t *testing.T) {
 	if size != 0 {
 		t.Fatalf("Clear() did not empty the store, got %d items", size)
 	}
-
-	// Clean up
-	_ = store.Close()
 }
 
 func TestDiskStore_Size(t *testing.T) {
@@ -253,6 +254,9 @@ func TestDiskStore_Size(t *testing.T) {
 
 	store := NewDiskStore()
 	store.path = tempFile
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
 
 	// Test empty store
 	size, err := store.Size()
@@ -280,9 +284,6 @@ func TestDiskStore_Size(t *testing.T) {
 	if size != 2 {
 		t.Fatalf("Size() returned unexpected size, got %d, want 2", size)
 	}
-
-	// Clean up
-	_ = store.Close()
 }
 
 func TestDiskStore_List(t *testing.T) {
@@ -294,6 +295,9 @@ func TestDiskStore_List(t *testing.T) {
 
 	store := NewDiskStore()
 	store.path = tempFile
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
 
 	// Test empty store
 	entries, err := store.List("", 0)
@@ -376,9 +380,6 @@ func TestDiskStore_List(t *testing.T) {
 	if !strings.HasPrefix(entries[0].Key, "prefix") {
 		t.Fatalf("List() with prefix and limit returned an entry without the prefix: %s", entries[0].Key)
 	}
-
-	// Clean up
-	_ = store.Close()
 }
 
 func TestDiskStore_Close(t *testing.T) {
@@ -390,6 +391,9 @@ func TestDiskStore_Close(t *testing.T) {
 
 	store := NewDiskStore()
 	store.path = tempFile
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
 
 	// Open the store by performing an operation
 	err := store.Set("key", "value")
@@ -418,6 +422,9 @@ func TestDiskStore_RefCount(t *testing.T) {
 
 	store := NewDiskStore()
 	store.path = tempFile
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
 
 	// Open the store by performing an operation
 	err := store.Set("key", "value")
@@ -476,8 +483,6 @@ func TestDiskStore_RefCount(t *testing.T) {
 
 // Helper function to set up a temporary disk store for testing
 func setupTempDiskStore(t *testing.T) string {
-	t.Helper()
-
 	// Create a temporary file
 	tempFile, err := os.CreateTemp(t.TempDir(), "diskstore-test-*.db") //nolint:forbidigo
 	if err != nil {
@@ -764,6 +769,9 @@ func TestDiskStore_TableDriven(t *testing.T) {
 
 			store := NewDiskStore()
 			store.path = tempFile
+			t.Cleanup(func() {
+				_ = store.Close()
+			})
 
 			tc.setup(store)
 			result, err := tc.operation(store)
