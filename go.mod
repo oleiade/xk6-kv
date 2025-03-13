@@ -4,14 +4,12 @@ go 1.23
 
 require (
 	github.com/grafana/sobek v0.0.0-20250219104821-ed22af7a8d6c
-	github.com/stretchr/testify v1.10.0
 	go.etcd.io/bbolt v1.4.0
 	go.k6.io/k6 v0.57.0
 )
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dlclark/regexp2 v1.11.4 // indirect
 	github.com/evanw/esbuild v0.24.2 // indirect
 	github.com/fatih/color v1.18.0 // indirect
@@ -28,7 +26,6 @@ require (
 	github.com/mstoykov/atlas v0.0.0-20220811071828-388f114305dd // indirect
 	github.com/onsi/ginkgo v1.16.5 // indirect
 	github.com/onsi/gomega v1.27.8 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/serenize/snaker v0.0.0-20201027110005-a7ad2135616e // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/afero v1.1.2 // indirect
@@ -49,5 +46,4 @@ require (
 	google.golang.org/grpc v1.69.4 // indirect
 	google.golang.org/protobuf v1.36.3 // indirect
 	gopkg.in/guregu/null.v3 v3.5.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
