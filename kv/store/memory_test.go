@@ -8,7 +8,7 @@ import (
 func TestNewMemoryStore(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 	if store == nil {
 		t.Fatal("NewMemoryStore() returned nil")
 	}
@@ -23,7 +23,7 @@ func TestNewMemoryStore(t *testing.T) {
 func TestMemoryStore_Get(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Test getting a non-existent key
 	_, err := store.Get("non-existent")
@@ -53,7 +53,7 @@ func TestMemoryStore_Get(t *testing.T) {
 func TestMemoryStore_Set(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Test setting a string value
 	err := store.Set("string-key", "string-value")
@@ -94,7 +94,7 @@ func TestMemoryStore_Set(t *testing.T) {
 func TestMemoryStore_Delete(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Setup
 	store.container["test-key"] = []byte("test-value")
@@ -120,7 +120,7 @@ func TestMemoryStore_Delete(t *testing.T) {
 func TestMemoryStore_Exists(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Test with non-existent key
 	exists, err := store.Exists("non-existent")
@@ -146,7 +146,7 @@ func TestMemoryStore_Exists(t *testing.T) {
 func TestMemoryStore_Clear(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Setup
 	store.container["key1"] = []byte("value1")
@@ -166,7 +166,7 @@ func TestMemoryStore_Clear(t *testing.T) {
 func TestMemoryStore_Size(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Test empty store
 	size, err := store.Size()
@@ -193,7 +193,7 @@ func TestMemoryStore_Size(t *testing.T) {
 func TestMemoryStore_List(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Test empty store
 	entries, err := store.List("", 0)
@@ -277,7 +277,7 @@ func TestMemoryStore_List(t *testing.T) {
 func TestMemoryStore_Close(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Close should be a no-op for MemoryStore
 	err := store.Close()
@@ -289,7 +289,7 @@ func TestMemoryStore_Close(t *testing.T) {
 func TestMemoryStore_Concurrency(t *testing.T) {
 	t.Parallel()
 
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 	done := make(chan bool)
 
 	// Test concurrent reads and writes
@@ -423,10 +423,50 @@ func TestMemoryStore_TableDriven(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := NewMemoryStore()
+			store := NewMemoryStore(true)
 			tc.setup(store)
 			result, err := tc.operation(store)
 			tc.validate(t, result, err)
 		})
+	}
+}
+
+func TestMemoryStore_RandomKey(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryStore(true)
+
+	// Test empty store
+	key, err := store.RandomKey()
+	if err != nil {
+		t.Fatalf("Unexpected error for empty store: %v", err)
+	}
+
+	if key != "" {
+		t.Fatalf("Expected empty key for empty store, got %q", key)
+	}
+
+	// Populate keys
+	keys := []string{"alpha", "beta", "gamma"}
+	for _, k := range keys {
+		_ = store.Set(k, "some-value")
+	}
+
+	// Test multiple random calls
+	found := make(map[string]bool)
+	for range 1000 {
+		k, err := store.RandomKey()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		found[k] = true
+	}
+
+	// Ensure all keys were returned at least once
+	for _, k := range keys {
+		if !found[k] {
+			t.Errorf("Key %q was never returned by RandomKey", k)
+		}
 	}
 }

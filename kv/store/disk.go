@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 )
 
 // DiskStore is a key-value store that uses a BoltDB database on disk.
+// It supports optional in-memory key tracking for O(1) RandomKey lookups.
 type DiskStore struct {
 	path     string
 	handle   *bolt.DB
@@ -17,6 +19,12 @@ type DiskStore struct {
 	opened   atomic.Bool
 	refCount atomic.Int64
 	lock     sync.Mutex
+
+	// Key tracking fields (enabled via trackKeys):
+	trackKeys bool           // whether in-memory key tracking is enabled
+	keysList  []string       // slice of all keys for O(1) random access by index
+	keysMap   map[string]int // maps key to its index in keysList for O(1) deletion
+	keysLock  sync.RWMutex   // mutex to protect concurrent access to keysList/keysMap
 }
 
 const (
@@ -28,13 +36,18 @@ const (
 )
 
 // NewDiskStore creates a new DiskStore instance.
-func NewDiskStore() *DiskStore {
+// If trackKeys is true, the store will maintain an in-memory index of all keys.
+func NewDiskStore(trackKeys bool) *DiskStore {
 	return &DiskStore{
-		path:     DefaultDiskStorePath,
-		handle:   new(bolt.DB),
-		opened:   atomic.Bool{},
-		refCount: atomic.Int64{},
-		lock:     sync.Mutex{},
+		path:      DefaultDiskStorePath,
+		handle:    new(bolt.DB),
+		opened:    atomic.Bool{},
+		refCount:  atomic.Int64{},
+		lock:      sync.Mutex{},
+		trackKeys: trackKeys,
+		keysMap:   make(map[string]int),
+		keysList:  []string{},
+		keysLock:  sync.RWMutex{},
 	}
 }
 
@@ -77,6 +90,17 @@ func (s *DiskStore) open() error {
 	s.opened.Store(true)
 	s.refCount.Add(1)
 
+	// If in-memory key tracking is enabled, load all existing keys from DB into memory.
+	if s.trackKeys {
+		if err := s.rebuildKeyListUnlocked(); err != nil {
+			// If we fail to build the key list, close DB and return error.
+			_ = s.handle.Close()
+			s.opened.Store(false)
+
+			return fmt.Errorf("failed to initialize key list: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -85,6 +109,16 @@ func (s *DiskStore) Get(key string) (any, error) {
 	// Ensure the store is open
 	if err := s.open(); err != nil {
 		return nil, fmt.Errorf("failed to open disk store: %w", err)
+	}
+
+	if s.trackKeys {
+		s.keysLock.RLock()
+		_, ok := s.keysMap[key]
+		s.keysLock.RUnlock()
+
+		if !ok {
+			return nil, fmt.Errorf("key %s not found", key)
+		}
 	}
 
 	var value []byte
@@ -111,7 +145,8 @@ func (s *DiskStore) Get(key string) (any, error) {
 	return value, nil
 }
 
-// Set sets a value in the disk store.
+// Set inserts or updates the value for a given key.
+// If in-memory key tracking is enabled, it adds the key to the in-memory index if it is a new key.
 func (s *DiskStore) Set(key string, value any) error {
 	// Ensure the store is open
 	if err := s.open(); err != nil {
@@ -142,10 +177,23 @@ func (s *DiskStore) Set(key string, value any) error {
 		return fmt.Errorf("unable to insert value into disk store: %w", err)
 	}
 
+	// Update the in-memory key list if tracking is enabled
+	if s.trackKeys {
+		s.keysLock.Lock()
+		if _, exists := s.keysMap[key]; !exists {
+			// New key: append to keysList and record its index in keysMap
+			s.keysMap[key] = len(s.keysList)
+			s.keysList = append(s.keysList, key)
+		}
+
+		s.keysLock.Unlock()
+	}
+
 	return nil
 }
 
-// Delete removes a value from the disk store.
+// Delete removes a key and its value from the store.
+// If key tracking is enabled, the key is also removed from the in-memory index in O(1) time.
 func (s *DiskStore) Delete(key string) error {
 	// Ensure the store is open
 	if err := s.open(); err != nil {
@@ -164,6 +212,27 @@ func (s *DiskStore) Delete(key string) error {
 		return fmt.Errorf("unable to delete value from disk store: %w", err)
 	}
 
+	// If tracking is enabled, remove the key from the in-memory structures
+	if s.trackKeys {
+		s.keysLock.Lock()
+		if idx, exists := s.keysMap[key]; exists {
+			lastIndex := len(s.keysList) - 1
+			lastKey := s.keysList[lastIndex]
+			// Swap the element to delete with the last element, to enable O(1) removal
+			if idx != lastIndex {
+				s.keysList[idx] = lastKey
+				s.keysMap[lastKey] = idx
+			}
+
+			// Remove the last element (which is now the target key)
+			s.keysList = s.keysList[:lastIndex]
+
+			delete(s.keysMap, key)
+		}
+
+		s.keysLock.Unlock()
+	}
+
 	return nil
 }
 
@@ -174,7 +243,15 @@ func (s *DiskStore) Exists(key string) (bool, error) {
 		return false, fmt.Errorf("failed to open disk store: %w", err)
 	}
 
-	exists := false
+	if s.trackKeys {
+		s.keysLock.RLock()
+		_, ok := s.keysMap[key]
+		s.keysLock.RUnlock()
+
+		return ok, nil
+	}
+
+	var exists bool
 	err := s.handle.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
 		if bucket == nil {
@@ -191,7 +268,8 @@ func (s *DiskStore) Exists(key string) (bool, error) {
 	return exists, nil
 }
 
-// Clear removes all keys from the store.
+// Clear wipes all keys and values from the store.
+// It also clears the in-memory key list if tracking is enabled.
 func (s *DiskStore) Clear() error {
 	// Ensure the store is open
 	if err := s.open(); err != nil {
@@ -210,6 +288,14 @@ func (s *DiskStore) Clear() error {
 	})
 	if err != nil {
 		return fmt.Errorf("unable to clear disk store: %w", err)
+	}
+
+	// Reset the in-memory key tracking structures
+	if s.trackKeys {
+		s.keysLock.Lock()
+		s.keysList = []string{}
+		s.keysMap = make(map[string]int)
+		s.keysLock.Unlock()
 	}
 
 	return nil
@@ -284,6 +370,107 @@ func (s *DiskStore) List(prefix string, limit int64) ([]Entry, error) {
 	}
 
 	return entries, nil
+}
+
+// RandomKey returns a random key from the store.
+// Returns "" and nil error when the store is empty.
+// May be O(1) when in-memory key tracking is enabled.
+// Otherwise the implementation may fall back to a slower scan.
+func (s *DiskStore) RandomKey() (string, error) {
+	if err := s.open(); err != nil {
+		return "", fmt.Errorf("failed to open disk store: %w", err)
+	}
+
+	if s.trackKeys {
+		// Fast path: choose a random key from the in-memory slice
+		s.keysLock.RLock()
+		defer s.keysLock.RUnlock()
+
+		if len(s.keysList) == 0 {
+			return "", nil
+		}
+
+		randomIndex := rand.IntN(len(s.keysList)) //nolint:gosec
+
+		return s.keysList[randomIndex], nil
+	}
+
+	// Slow path: use List() to get all keys
+	keyCount, err := s.Size()
+	if err != nil {
+		return "", fmt.Errorf("failed to get store size: %w", err)
+	}
+
+	if keyCount == 0 {
+		return "", nil
+	}
+
+	randomIndex := rand.Int64N(keyCount) //nolint:gosec
+
+	entries, err := s.List("", randomIndex+1)
+	if err != nil {
+		return "", fmt.Errorf("failed to list keys: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no keys returned from list")
+	}
+
+	return entries[len(entries)-1].Key, nil
+}
+
+// RebuildKeyList re-scans all keys from BoltDB to rebuild the in-memory key index.
+// This can be used to recover from any inconsistency between the in-memory list
+// and the actual data on disk (for example, after a corruption or manual intervention).
+func (s *DiskStore) RebuildKeyList() error {
+	if !s.trackKeys {
+		return nil
+	}
+
+	if err := s.open(); err != nil {
+		return fmt.Errorf("failed to open disk store: %w", err)
+	}
+
+	s.keysLock.Lock()
+	defer s.keysLock.Unlock()
+
+	if err := s.rebuildKeyListUnlocked(); err != nil {
+		return fmt.Errorf("unable to rebuild keys from disk: %w", err)
+	}
+
+	return nil
+}
+
+// rebuildKeyListUnlocked is an internal helper that rebuilds the key list from DB.
+// It assumes that any necessary locking has been handled by the caller (used during open).
+func (s *DiskStore) rebuildKeyListUnlocked() error {
+	// We don't lock keysLock here because this is called during initialization
+	// when no other operations are in progress.
+	// Alternatively, we could lock it to be safe.
+	newKeys := []string{}
+	newMap := make(map[string]int)
+	err := s.handle.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(s.bucket)
+		if bucket == nil {
+			return fmt.Errorf("bucket %s not found", s.bucket)
+		}
+
+		return bucket.ForEach(func(k, _ []byte) error {
+			keyStr := string(k)
+			newMap[keyStr] = len(newKeys)
+			newKeys = append(newKeys, keyStr)
+
+			return nil
+		})
+	})
+	if err != nil {
+		return err
+	}
+
+	s.keysList = newKeys
+	s.keysMap = newMap
+
+	return nil
 }
 
 // Close closes the disk store.

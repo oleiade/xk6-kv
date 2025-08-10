@@ -209,6 +209,87 @@ export async function consumer() {
 }
 ```
 
+## New Enhancements
+
+### `randomKey(): Promise<string>`
+
+Returns a randomly selected key from the store.
+
+**Behavior**:
+
+* Available on both memory and disk backends.
+* Returns an empty string `""` and **no error** when the store has no keys.
+* O(1) when `{ trackKeys: true }` (uses an in-memory index), otherwise falls back to a linear scan.
+
+**Use Cases**:
+
+* Great for simulating random reads during testing.
+* Useful for sampling load from unpredictable access patterns.
+
+```javascript
+const key = await kv.randomKey();
+if (!key) {
+  // Storage is empty; optionally seed or skip.
+  console.log("No keys available yet.");
+} else {
+  const value = await kv.get(key);
+  console.log(`Random entry: ${key} => ${value}`);
+}
+```
+
+---
+
+### `rebuildKeyList(): Promise<boolean>`
+
+Rebuilds the internal key index from persistent storage (e.g., after a crash or restart).
+
+**Behavior**:
+
+* No-op unless the store was opened with `{ trackKeys: true }`.
+* On **disk** backends, re-scans BoltDB to rebuild the in-memory key index.
+* On **memory** backends, rebuilds from the in-memory map.
+* Resolves to `true` when finished.
+
+**Use Cases**:
+
+* Ensures `randomKey()` and `list()` behave correctly after test restarts or filesystem-level changes.
+
+```javascript
+const ok = await kv.rebuildKeyList();
+if (ok) console.log("Key list rebuilt successfully.");
+```
+
+---
+
+## Example: Random Consumer with Rebuild
+
+```javascript
+import { openKv } from "k6/x/kv";
+
+const kv = openKv({
+  backend: "disk",
+  trackKeys: true,
+});
+
+export async function setup() {
+  await kv.clear();
+  await kv.set("alpha", "a");
+  await kv.set("bravo", "b");
+  await kv.set("charlie", "c");
+}
+
+export default async function () {
+  await kv.rebuildKeyList(); // Ensures index is fresh
+  const key = await kv.randomKey();
+  if (!key) {
+    console.log("No keys yet — skipping this iteration.");
+    return;
+  }
+  const value = await kv.get(key);
+  console.log(`Random key: ${key}, value: ${value}`);
+}
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.

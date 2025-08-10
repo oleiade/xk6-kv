@@ -3,8 +3,8 @@ module github.com/oleiade/xk6-kv
 go 1.23
 
 require (
-	github.com/grafana/sobek v0.0.0-20250219104821-ed22af7a8d6c
-	go.etcd.io/bbolt v1.4.0
+	github.com/grafana/sobek v0.0.0-20250723111835-dd8a13f0d439
+	go.etcd.io/bbolt v1.4.2
 	go.k6.io/k6 v0.57.0
 )
 

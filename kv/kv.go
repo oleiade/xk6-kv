@@ -222,6 +222,52 @@ func (k *KV) List(options sobek.Value) *sobek.Promise {
 	return promise
 }
 
+// RandomKey returns a random key from the store.
+// Resolves to "" (empty string) when the store is empty.
+func (k *KV) RandomKey() *sobek.Promise {
+	promise, resolve, reject := promises.New(k.vu)
+
+	go func() {
+		if k.store == nil {
+			reject(NewError(DatabaseNotOpenError, "database is not open"))
+			return
+		}
+
+		key, err := k.store.RandomKey()
+		if err != nil {
+			reject(err)
+			return
+		}
+
+		resolve(key)
+	}()
+
+	return promise
+}
+
+// RebuildKeyList rebuilds in-memory key indexes from the underlying store if supported.
+// Resolves to true when finished (no-op and true when trackKeys is disabled).
+func (k *KV) RebuildKeyList() *sobek.Promise {
+	promise, resolve, reject := promises.New(k.vu)
+
+	go func() {
+		if k.store == nil {
+			reject(NewError(DatabaseNotOpenError, "database is not open"))
+			return
+		}
+
+		err := k.store.RebuildKeyList()
+		if err != nil {
+			reject(err)
+			return
+		}
+
+		resolve(true)
+	}()
+
+	return promise
+}
+
 // ListEntry is a key-value pair returned by KV.List().
 type ListEntry struct {
 	Key   string `json:"key"`

@@ -8,39 +8,51 @@ import (
 )
 
 func BenchmarkDiskStore_Get(b *testing.B) {
-	// Create a temporary file for testing
-	tempFile, err := os.CreateTemp(b.TempDir(), "diskstore-bench-*.db")
-	if err != nil {
-		b.Fatalf("Failed to create temporary file: %v", err)
-	}
-	tempFile.Close()
-	defer os.Remove(tempFile.Name())
-
-	store := NewDiskStore()
-	store.path = tempFile.Name()
-
-	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
-		key := fmt.Sprintf("key-%d", i)
-		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+	run := func(b *testing.B, trackKeys bool) {
+		// Create a temporary file for testing
+		tempFile, err := os.CreateTemp(b.TempDir(), "diskstore-bench-*.db")
 		if err != nil {
-			b.Fatalf("Failed to set up benchmark: %v", err)
+			b.Fatalf("Failed to create temporary file: %v", err)
 		}
+
+		tempFile.Close()
+
+		defer os.Remove(tempFile.Name())
+
+		store := NewDiskStore(trackKeys)
+		store.path = tempFile.Name()
+
+		// Setup: Add some data to the store
+		for i := range 1000 {
+			key := fmt.Sprintf("key-%d", i)
+			value := fmt.Sprintf("value-%d", i)
+			err := store.Set(key, value)
+			if err != nil {
+				b.Fatalf("Failed to set up benchmark: %v", err)
+			}
+		}
+
+		// Reset the timer before the actual benchmark
+		b.ResetTimer()
+
+		// Run the benchmark
+		for i := range b.N {
+			key := fmt.Sprintf("key-%d", i%1000)
+			_, _ = store.Get(key)
+		}
+
+		// Clean up
+		b.StopTimer()
+		_ = store.Close()
 	}
 
-	// Reset the timer before the actual benchmark
-	b.ResetTimer()
+	b.Run("WithTrackKeys", func(b *testing.B) {
+		run(b, true)
+	})
 
-	// Run the benchmark
-	for i := 0; i < b.N; i++ {
-		key := fmt.Sprintf("key-%d", i%1000)
-		_, _ = store.Get(key)
-	}
-
-	// Clean up
-	b.StopTimer()
-	_ = store.Close()
+	b.Run("WithoutTrackKeys", func(b *testing.B) {
+		run(b, false)
+	})
 }
 
 func BenchmarkDiskStore_Set(b *testing.B) {
@@ -49,17 +61,19 @@ func BenchmarkDiskStore_Set(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to create temporary file: %v", err)
 	}
+
 	tempFile.Close()
+
 	defer os.Remove(tempFile.Name())
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile.Name()
 
 	// Reset the timer before the actual benchmark
 	b.ResetTimer()
 
 	// Run the benchmark
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
 		_ = store.Set(key, value)
@@ -81,16 +95,19 @@ func BenchmarkDiskStore_Delete(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Failed to create temporary file: %v", err)
 			}
+
 			tempFile.Close()
+
 			defer os.Remove(tempFile.Name())
 
-			store := NewDiskStore()
+			store := NewDiskStore(true)
 			store.path = tempFile.Name()
 
 			// Setup: Add data to the store
-			for i := 0; i < size; i++ {
+			for i := range size {
 				key := fmt.Sprintf("key-%d", i)
 				value := fmt.Sprintf("value-%d", i)
+
 				err := store.Set(key, value)
 				if err != nil {
 					b.Fatalf("Failed to set up benchmark: %v", err)
@@ -101,7 +118,7 @@ func BenchmarkDiskStore_Delete(b *testing.B) {
 			b.ResetTimer()
 
 			// Run the benchmark
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				key := fmt.Sprintf("key-%d", i%size)
 				_ = store.Delete(key)
 
@@ -122,39 +139,52 @@ func BenchmarkDiskStore_Delete(b *testing.B) {
 }
 
 func BenchmarkDiskStore_Exists(b *testing.B) {
-	// Create a temporary file for testing
-	tempFile, err := os.CreateTemp(b.TempDir(), "diskstore-bench-*.db")
-	if err != nil {
-		b.Fatalf("Failed to create temporary file: %v", err)
-	}
-	tempFile.Close()
-	defer os.Remove(tempFile.Name())
-
-	store := NewDiskStore()
-	store.path = tempFile.Name()
-
-	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
-		key := fmt.Sprintf("key-%d", i)
-		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+	run := func(b *testing.B, trackKeys bool) {
+		// Create a temporary file for testing
+		tempFile, err := os.CreateTemp(b.TempDir(), "diskstore-bench-*.db")
 		if err != nil {
-			b.Fatalf("Failed to set up benchmark: %v", err)
+			b.Fatalf("Failed to create temporary file: %v", err)
 		}
+
+		tempFile.Close()
+
+		defer os.Remove(tempFile.Name())
+
+		store := NewDiskStore(trackKeys)
+		store.path = tempFile.Name()
+
+		// Setup: Add some data to the store
+		for i := range 1000 {
+			key := fmt.Sprintf("key-%d", i)
+			value := fmt.Sprintf("value-%d", i)
+
+			err := store.Set(key, value)
+			if err != nil {
+				b.Fatalf("Failed to set up benchmark: %v", err)
+			}
+		}
+
+		// Reset the timer before the actual benchmark
+		b.ResetTimer()
+
+		// Run the benchmark
+		for i := range b.N {
+			key := fmt.Sprintf("key-%d", i%1000)
+			_, _ = store.Exists(key)
+		}
+
+		// Clean up
+		b.StopTimer()
+		_ = store.Close()
 	}
 
-	// Reset the timer before the actual benchmark
-	b.ResetTimer()
+	b.Run("WithTrackKeys", func(b *testing.B) {
+		run(b, true)
+	})
 
-	// Run the benchmark
-	for i := 0; i < b.N; i++ {
-		key := fmt.Sprintf("key-%d", i%1000)
-		_, _ = store.Exists(key)
-	}
-
-	// Clean up
-	b.StopTimer()
-	_ = store.Close()
+	b.Run("WithoutTrackKeys", func(b *testing.B) {
+		run(b, false)
+	})
 }
 
 func BenchmarkDiskStore_List(b *testing.B) {
@@ -163,16 +193,19 @@ func BenchmarkDiskStore_List(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to create temporary file: %v", err)
 	}
+
 	tempFile.Close()
+
 	defer os.Remove(tempFile.Name())
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile.Name()
 
 	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
+
 		err := store.Set(key, value)
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
@@ -180,9 +213,10 @@ func BenchmarkDiskStore_List(b *testing.B) {
 	}
 
 	// Add some data with a specific prefix
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		key := fmt.Sprintf("prefix-%d", i)
 		value := fmt.Sprintf("value-%d", i)
+
 		err := store.Set(key, value)
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
@@ -192,28 +226,28 @@ func BenchmarkDiskStore_List(b *testing.B) {
 	// Benchmark different List operations
 	b.Run("ListAll", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = store.List("", 0)
 		}
 	})
 
 	b.Run("ListWithPrefix", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = store.List("prefix", 0)
 		}
 	})
 
 	b.Run("ListWithLimit", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = store.List("", 10)
 		}
 	})
 
 	b.Run("ListWithPrefixAndLimit", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = store.List("prefix", 10)
 		}
 	})
@@ -229,16 +263,19 @@ func BenchmarkDiskStore_Concurrent(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to create temporary file: %v", err)
 	}
+
 	tempFile.Close()
+
 	defer os.Remove(tempFile.Name())
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile.Name()
 
 	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
+
 		err := store.Set(key, value)
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
@@ -261,6 +298,7 @@ func BenchmarkDiskStore_Concurrent(b *testing.B) {
 				value := fmt.Sprintf("value-%d", i)
 				_ = store.Set(key, value)
 			}
+
 			i++
 		}
 	})
@@ -268,4 +306,80 @@ func BenchmarkDiskStore_Concurrent(b *testing.B) {
 	// Clean up
 	b.StopTimer()
 	_ = store.Close()
+}
+
+func BenchmarkDiskStore_RandomKey(b *testing.B) {
+	run := func(b *testing.B, trackKeys bool) {
+		b.Helper()
+
+		tempFile, err := os.CreateTemp(b.TempDir(), "randomkey-bench-*.db")
+		if err != nil {
+			b.Fatalf("Failed to create temporary file: %v", err)
+		}
+
+		defer os.Remove(tempFile.Name())
+
+		store := NewDiskStore(trackKeys)
+		store.path = tempFile.Name()
+
+		// Setup data
+		for i := range 10_000 {
+			_ = store.Set(fmt.Sprintf("key-%d", i), fmt.Sprintf("value-%d", i))
+		}
+
+		b.ResetTimer()
+
+		for range b.N {
+			_, _ = store.RandomKey()
+		}
+
+		b.StopTimer()
+		_ = store.Close()
+	}
+
+	b.Run("WithTrackKeys", func(b *testing.B) {
+		run(b, true)
+	})
+
+	b.Run("WithoutTrackKeys", func(b *testing.B) {
+		run(b, false)
+	})
+}
+
+func BenchmarkDiskStore_RebuildKeyList(b *testing.B) {
+	run := func(b *testing.B, trackKeys bool) {
+		b.Helper()
+
+		tempFile, err := os.CreateTemp(b.TempDir(), "rebuildkeylist-bench-*.db")
+		if err != nil {
+			b.Fatalf("Failed to create temporary file: %v", err)
+		}
+
+		defer os.Remove(tempFile.Name())
+
+		store := NewDiskStore(trackKeys)
+		store.path = tempFile.Name()
+
+		// Fill with keys
+		for i := range 10_000 {
+			_ = store.Set(fmt.Sprintf("key-%d", i), fmt.Sprintf("value-%d", i))
+		}
+
+		b.ResetTimer()
+
+		for range b.N {
+			_ = store.RebuildKeyList()
+		}
+
+		b.StopTimer()
+		_ = store.Close()
+	}
+
+	b.Run("WithTrackKeys", func(b *testing.B) {
+		run(b, true)
+	})
+
+	b.Run("WithoutTrackKeys", func(b *testing.B) {
+		run(b, false)
+	})
 }

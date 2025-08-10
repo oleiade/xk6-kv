@@ -25,3 +25,6 @@ go.work
 
 # Ignore k6-kv database files
 ./k6-kv
+
+# Ignore local binary output folder
+/bin/

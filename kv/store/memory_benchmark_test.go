@@ -6,7 +6,7 @@ import (
 )
 
 func BenchmarkMemoryStore_Get(b *testing.B) {
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Setup: Add some data to the store
 	for i := range 1000 {
@@ -22,23 +22,62 @@ func BenchmarkMemoryStore_Get(b *testing.B) {
 	b.ResetTimer()
 
 	// Run the benchmark
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		key := fmt.Sprintf("key-%d", i%1000)
 		_, _ = store.Get(key)
 	}
 }
 
 func BenchmarkMemoryStore_Set(b *testing.B) {
-	store := NewMemoryStore()
+	cases := []struct {
+		name      string
+		trackKeys bool
+	}{
+		{"WithTrackKeys", true},
+		{"WithoutTrackKeys", false},
+	}
 
-	// Reset the timer before the actual benchmark
-	b.ResetTimer()
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			store := NewMemoryStore(tc.trackKeys)
 
-	// Run the benchmark
-	for i := range b.N {
-		key := fmt.Sprintf("key-%d", i)
-		value := fmt.Sprintf("value-%d", i)
-		_ = store.Set(key, value)
+			// Reset the timer before the actual benchmark
+			b.ResetTimer()
+
+			// Run the benchmark
+			for i := range b.N {
+				key := fmt.Sprintf("key-%d", i)
+				_ = store.Set(key, "value")
+			}
+		})
+	}
+}
+
+func BenchmarkMemoryStore_RandomKey(b *testing.B) {
+	cases := []struct {
+		name      string
+		trackKeys bool
+	}{
+		{"WithTrackKeys", true},
+		{"WithoutTrackKeys", false},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			store := NewMemoryStore(tc.trackKeys)
+
+			for i := range 10_000 {
+				_ = store.Set(fmt.Sprintf("key-%d", i), "value")
+			}
+
+			// Reset the timer before the actual benchmark
+			b.ResetTimer()
+
+			// Run the benchmark
+			for i := 0; i < b.N; i++ {
+				_, _ = store.RandomKey()
+			}
+		})
 	}
 }
 
@@ -48,7 +87,7 @@ func BenchmarkMemoryStore_Delete(b *testing.B) {
 
 	for _, size := range benchSizes {
 		b.Run(fmt.Sprintf("Size-%d", size), func(b *testing.B) {
-			store := NewMemoryStore()
+			store := NewMemoryStore(true)
 
 			// Setup: Add data to the store
 			for i := range size {
@@ -79,7 +118,7 @@ func BenchmarkMemoryStore_Delete(b *testing.B) {
 }
 
 func BenchmarkMemoryStore_Exists(b *testing.B) {
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Setup: Add some data to the store
 	for i := range 1000 {
@@ -102,10 +141,10 @@ func BenchmarkMemoryStore_Exists(b *testing.B) {
 }
 
 func BenchmarkMemoryStore_List(b *testing.B) {
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
 		err := store.Set(key, value)
@@ -127,35 +166,35 @@ func BenchmarkMemoryStore_List(b *testing.B) {
 	// Benchmark different List operations
 	b.Run("ListAll", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = store.List("", 0)
 		}
 	})
 
 	b.Run("ListWithPrefix", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = store.List("prefix", 0)
 		}
 	})
 
 	b.Run("ListWithLimit", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = store.List("", 10)
 		}
 	})
 
 	b.Run("ListWithPrefixAndLimit", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			_, _ = store.List("prefix", 10)
 		}
 	})
 }
 
 func BenchmarkMemoryStore_Concurrent(b *testing.B) {
-	store := NewMemoryStore()
+	store := NewMemoryStore(true)
 
 	// Setup: Add some data to the store
 	for i := range 1000 {

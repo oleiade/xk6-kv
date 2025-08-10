@@ -4,15 +4,17 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
 func TestNewDiskStore(t *testing.T) {
 	t.Parallel()
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	if store == nil {
 		t.Fatal("NewDiskStore() returned nil")
 	}
@@ -36,7 +38,7 @@ func TestDiskStore_Get(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile
 
 	// Test getting a non-existent key
@@ -76,7 +78,7 @@ func TestDiskStore_Set(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile
 	t.Cleanup(func() {
 		_ = store.Close()
@@ -135,7 +137,7 @@ func TestDiskStore_Delete(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile
 	t.Cleanup(func() {
 		_ = store.Close()
@@ -176,7 +178,7 @@ func TestDiskStore_Exists(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile
 	t.Cleanup(func() {
 		_ = store.Close()
@@ -213,7 +215,7 @@ func TestDiskStore_Clear(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile
 	t.Cleanup(func() {
 		_ = store.Close()
@@ -252,7 +254,7 @@ func TestDiskStore_Size(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile
 	t.Cleanup(func() {
 		_ = store.Close()
@@ -293,7 +295,7 @@ func TestDiskStore_List(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile
 	t.Cleanup(func() {
 		_ = store.Close()
@@ -389,7 +391,7 @@ func TestDiskStore_Close(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile
 	t.Cleanup(func() {
 		_ = store.Close()
@@ -420,7 +422,7 @@ func TestDiskStore_RefCount(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
+	store := NewDiskStore(true)
 	store.path = tempFile
 	t.Cleanup(func() {
 		_ = store.Close()
@@ -478,6 +480,228 @@ func TestDiskStore_RefCount(t *testing.T) {
 	// Verify the store is closed
 	if store.opened.Load() {
 		t.Fatal("Store should be closed after second close")
+	}
+}
+
+func TestDiskStore_RandomKey_WithTracking(t *testing.T) {
+	t.Parallel()
+
+	tempFile := setupTempDiskStore(t)
+	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+
+	store := NewDiskStore(true) // Enable key tracking
+	store.path = tempFile
+	t.Cleanup(func() { _ = store.Close() })
+
+	// Test empty store
+	key, err := store.RandomKey()
+	if err != nil {
+		t.Fatalf("Unexpected error for empty store: %v", err)
+	}
+
+	if key != "" {
+		t.Fatalf("Expected empty key for empty store, got %q", key)
+	}
+
+	// Add keys
+	keys := []string{"key1", "key2", "key3"}
+	for _, k := range keys {
+		_ = store.Set(k, "value")
+	}
+
+	// Test random key selection
+	found := make(map[string]bool)
+	for range 50 {
+		key, err := store.RandomKey()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		found[key] = true
+	}
+
+	// Should have found all keys
+	for _, k := range keys {
+		if !found[k] {
+			t.Errorf("Key %s not found in random selections", k)
+		}
+	}
+}
+
+func TestDiskStore_RandomKey_WithoutTracking(t *testing.T) {
+	t.Parallel()
+
+	tempFile := setupTempDiskStore(t)
+	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+
+	// Disable key tracking
+	store := NewDiskStore(false)
+	store.path = tempFile
+	t.Cleanup(func() { _ = store.Close() })
+
+	// Test empty store
+	key, err := store.RandomKey()
+	if err != nil {
+		t.Fatalf("Unexpected error for empty store: %v", err)
+	}
+
+	if key != "" {
+		t.Fatalf("Expected empty key for empty store, got %q", key)
+	}
+
+	// Add keys
+	keys := []string{"key1", "key2", "key3"}
+	for _, k := range keys {
+		_ = store.Set(k, "value")
+	}
+
+	// Test random key selection
+	key, err = store.RandomKey()
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if key == "" {
+		t.Fatal("Expected non-empty key")
+	}
+}
+
+func TestDiskStore_RebuildKeyList(t *testing.T) {
+	t.Parallel()
+
+	tempFile := setupTempDiskStore(t)
+	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+
+	store := NewDiskStore(true)
+	store.path = tempFile
+	t.Cleanup(func() { _ = store.Close() })
+
+	// Add initial keys
+	_ = store.Set("key1", "value1")
+	_ = store.Set("key2", "value2")
+
+	// Corrupt in-memory index
+	store.keysLock.Lock()
+	store.keysMap = make(map[string]int)
+	store.keysList = []string{}
+	store.keysLock.Unlock()
+
+	// Rebuild index
+	err := store.RebuildKeyList()
+	if err != nil {
+		t.Fatalf("RebuildKeyList failed: %v", err)
+	}
+
+	// Verify index
+	store.keysLock.RLock()
+	defer store.keysLock.RUnlock()
+	if len(store.keysList) != 2 {
+		t.Fatalf("Expected 2 keys, got %d", len(store.keysList))
+	}
+
+	expected := map[string]bool{"key1": true, "key2": true}
+	for _, k := range store.keysList {
+		if !expected[k] {
+			t.Errorf("Unexpected key in index: %s", k)
+		}
+	}
+}
+
+func TestDiskStore_KeyTrackingConsistency(t *testing.T) {
+	t.Parallel()
+
+	tempFile := setupTempDiskStore(t)
+	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+
+	store := NewDiskStore(true)
+	store.path = tempFile
+	t.Cleanup(func() { _ = store.Close() })
+
+	// Add keys
+	keys := []string{"key1", "key2", "key3"}
+	for _, k := range keys {
+		_ = store.Set(k, "value")
+	}
+
+	// Verify index
+	store.keysLock.RLock()
+	if len(store.keysList) != 3 {
+		t.Fatalf("Expected 3 keys, got %d", len(store.keysList))
+	}
+
+	for _, k := range keys {
+		if _, exists := store.keysMap[k]; !exists {
+			t.Errorf("Key %s missing from index", k)
+		}
+	}
+
+	store.keysLock.RUnlock()
+
+	// Delete key
+	_ = store.Delete("key2")
+
+	// Verify index after deletion
+	store.keysLock.RLock()
+	if len(store.keysList) != 2 {
+		t.Fatalf("Expected 2 keys after deletion, got %d", len(store.keysList))
+	}
+
+	if _, exists := store.keysMap["key2"]; exists {
+		t.Error("Deleted key still in index")
+	}
+
+	store.keysLock.RUnlock()
+
+	// Clear store
+	_ = store.Clear()
+
+	// Verify index after clear
+	store.keysLock.RLock()
+	if len(store.keysList) != 0 {
+		t.Fatalf("Expected empty index after clear, got %d keys", len(store.keysList))
+	}
+
+	store.keysLock.RUnlock()
+}
+
+func TestDiskStore_ConcurrentOperations(t *testing.T) {
+	t.Parallel()
+
+	tempFile := setupTempDiskStore(t)
+	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+
+	store := NewDiskStore(true)
+	store.path = tempFile
+	t.Cleanup(func() { _ = store.Close() })
+
+	var wg sync.WaitGroup
+	for i := range 1000 {
+		wg.Add(1)
+
+		go func(i int) {
+			defer wg.Done()
+
+			key := fmt.Sprintf("key%d", i)
+			_ = store.Set(key, "value")
+			_, _ = store.Get(key)
+
+			_, _ = store.Exists(key)
+			_, _ = store.RandomKey()
+
+			_ = store.Delete(key)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Final consistency check
+	size, err := store.Size()
+	if err != nil {
+		t.Fatalf("Size error: %v", err)
+	}
+
+	if size != 0 {
+		t.Fatalf("Expected empty store, got %d keys", size)
 	}
 }
 
@@ -767,7 +991,7 @@ func TestDiskStore_TableDriven(t *testing.T) {
 			tempFile := setupTempDiskStore(t)
 			defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-			store := NewDiskStore()
+			store := NewDiskStore(true)
 			store.path = tempFile
 			t.Cleanup(func() {
 				_ = store.Close()
