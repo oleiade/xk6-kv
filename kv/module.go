@@ -9,6 +9,9 @@ package kv
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
 
 	"github.com/grafana/sobek"
 	"go.k6.io/k6/v2/js/common"
@@ -18,10 +21,15 @@ import (
 )
 
 type (
-	// RootModule is the global module instance that will create Client
-	// instances for each VU.
+	// RootModule is the global module instance that creates KV instances for each VU.
 	RootModule struct {
-		store store.Store
+		// storeOnce serializes the lazy initialization of the shared store. The
+		// first openKv() call to win the race constructs the backend; later
+		// callers either reuse it or, if their options conflict, get an error.
+		storeOnce sync.Once
+		store     store.Store
+		storeErr  error
+		storeOpts Options
 	}
 
 	// ModuleInstance represents an instance of the JS module.
@@ -36,6 +44,24 @@ var (
 	_ modules.Instance = &ModuleInstance{}
 	_ modules.Module   = &RootModule{}
 )
+
+// backendFactories registers the available raw storage backends. Adding a new
+// backend is a single map entry; OpenKv's validation and construction both
+// read from this map so the two paths cannot drift apart.
+//
+//nolint:gochecknoglobals
+var backendFactories = map[string]func() store.Backend{
+	"memory": func() store.Backend { return store.NewMemoryStore() },
+	"disk":   func() store.Backend { return store.NewDiskStore(store.DefaultDiskStorePath) },
+}
+
+// serializerFactories registers the available serializers. See backendFactories.
+//
+//nolint:gochecknoglobals
+var serializerFactories = map[string]func() store.Serializer{
+	"json":   func() store.Serializer { return store.NewJSONSerializer() },
+	"string": func() store.Serializer { return store.NewStringSerializer() },
+}
 
 // New returns a pointer to a new RootModule instance.
 //
@@ -63,6 +89,11 @@ func (mi *ModuleInstance) Exports() modules.Exports {
 }
 
 // OpenKv opens the KV store and returns a KV instance.
+//
+// The shared store is constructed once per process on the first call. Later
+// calls reuse that store. If a later call requests options that conflict with
+// the options the store was first opened with, it errors out — VUs cannot
+// safely "reopen" the store with a different backend or serializer.
 func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 	options, err := NewOptionsFrom(mi.vu, opts)
 	if err != nil {
@@ -70,30 +101,43 @@ func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 		return nil
 	}
 
-	if mi.rm.store == nil {
-		var backend store.Backend
-		switch options.Backend {
-		case "memory":
-			backend = store.NewMemoryStore()
-		case "disk":
-			backend = store.NewDiskStore(store.DefaultDiskStorePath)
+	mi.rm.storeOnce.Do(func() {
+		mi.rm.store, mi.rm.storeErr = buildStore(options)
+		if mi.rm.storeErr == nil {
+			mi.rm.storeOpts = options
 		}
+	})
+	if mi.rm.storeErr != nil {
+		common.Throw(mi.vu.Runtime(), mi.rm.storeErr)
+		return nil
+	}
 
-		var serializer store.Serializer
-		switch options.Serialization {
-		case "json":
-			serializer = store.NewJSONSerializer()
-		case "string":
-			serializer = store.NewStringSerializer()
-		default:
-			serializer = store.NewJSONSerializer()
-		}
-
-		mi.rm.store = store.NewSerializedStore(backend, serializer)
+	if mi.rm.storeOpts != options {
+		common.Throw(mi.vu.Runtime(), fmt.Errorf(
+			"kv module already initialized with backend=%q serialization=%q; "+
+				"cannot reopen with backend=%q serialization=%q",
+			mi.rm.storeOpts.Backend, mi.rm.storeOpts.Serialization,
+			options.Backend, options.Serialization,
+		))
+		return nil
 	}
 
 	kv := NewKV(mi.vu, mi.rm.store)
 	return mi.vu.Runtime().ToValue(kv).ToObject(mi.vu.Runtime())
+}
+
+// buildStore constructs a Store from validated options by composing a backend
+// and a serializer via the SerializedStore decorator.
+func buildStore(options Options) (store.Store, error) {
+	backendFactory, ok := backendFactories[options.Backend]
+	if !ok {
+		return nil, fmt.Errorf("unknown backend: %q", options.Backend)
+	}
+	serializerFactory, ok := serializerFactories[options.Serialization]
+	if !ok {
+		return nil, fmt.Errorf("unknown serialization: %q", options.Serialization)
+	}
+	return store.NewSerializedStore(backendFactory(), serializerFactory()), nil
 }
 
 // Options represents the options for a KV instance.
@@ -109,9 +153,10 @@ type Options struct {
 	Serialization string `json:"serialization"`
 }
 
-// NewOptionsFrom creates a new KVOptions instance from a sobek.Value.
+// NewOptionsFrom creates a new Options instance from a sobek.Value, applying
+// defaults and validating the backend/serialization against the registered
+// factories.
 func NewOptionsFrom(vu modules.VU, options sobek.Value) (Options, error) {
-	// Default
 	opts := Options{
 		Backend:       DefaultBackend,
 		Serialization: DefaultSerialization,
@@ -122,21 +167,30 @@ func NewOptionsFrom(vu modules.VU, options sobek.Value) (Options, error) {
 	}
 
 	if err := vu.Runtime().ExportTo(options, &opts); err != nil {
-		return opts, fmt.Errorf("unable to parse options; reason: %w", err)
+		return Options{}, fmt.Errorf("unable to parse options; reason: %w", err)
 	}
 
-	if opts.Backend != "memory" && opts.Backend != "disk" {
-		return opts, fmt.Errorf("invalid backend: %s, valid values are: %s, %s", opts.Backend, DefaultBackend, "disk")
+	if _, ok := backendFactories[opts.Backend]; !ok {
+		return Options{}, fmt.Errorf(
+			"invalid backend: %q (valid: %s)", opts.Backend, sortedKeys(backendFactories))
 	}
-
-	if opts.Serialization != "json" && opts.Serialization != "string" {
-		return opts, fmt.Errorf(
-			"invalid serialization: %s, valid values are: %s, %s",
-			opts.Serialization, DefaultSerialization, "string",
-		)
+	if _, ok := serializerFactories[opts.Serialization]; !ok {
+		return Options{}, fmt.Errorf(
+			"invalid serialization: %q (valid: %s)", opts.Serialization, sortedKeys(serializerFactories))
 	}
 
 	return opts, nil
+}
+
+// sortedKeys returns the comma-separated sorted keys of a map for stable
+// error messages.
+func sortedKeys[V any](m map[string]V) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 const (

@@ -18,7 +18,9 @@ import (
 // Keys are unique within a database, and the last value set for a given key is the one that
 // is returned when reading the key.
 type KV struct {
-	// store is the Store instance that this KV instance uses.
+	// store is the Store instance that this KV instance uses. It is set once
+	// by NewKV (which is only called from OpenKv after the shared store has
+	// been constructed) and is never nil for any KV reachable from JS.
 	store store.Store
 
 	// vu is the VU instance that this KV instance belongs to.
@@ -33,46 +35,14 @@ func NewKV(vu modules.VU, s store.Store) *KV {
 	}
 }
 
-// Set sets the value of a key in the store.
-//
-// If the key does not exist, it is created. If the key already exists, its value is overwritten.
-func (k *KV) Set(key sobek.Value, value sobek.Value) *sobek.Promise {
+// async runs work on a goroutine and resolves/rejects the resulting Promise
+// from the JS event loop. It is the only place this package creates a
+// Promise; each public KV method becomes a thin wrapper that captures any
+// sobek-side values up front and then hands a closure to async.
+func (k *KV) async(fn func() (any, error)) *sobek.Promise {
 	promise, resolve, reject := promises.New(k.vu)
-
-	keyString := key.String()
-	exportedValue := value.Export()
-
 	go func() {
-		if k.store == nil {
-			reject(NewError(DatabaseNotOpenError, "database is not open"))
-			return
-		}
-
-		err := k.store.Set(keyString, exportedValue)
-		if err != nil {
-			reject(err)
-			return
-		}
-
-		resolve(value)
-	}()
-
-	return promise
-}
-
-// Get returns the value of a key in the store.
-func (k *KV) Get(key sobek.Value) *sobek.Promise {
-	promise, resolve, reject := promises.New(k.vu)
-
-	keyString := key.String()
-
-	go func() {
-		if k.store == nil {
-			reject(NewError(DatabaseNotOpenError, "database is not open"))
-			return
-		}
-
-		value, err := k.store.Get(keyString)
+		value, err := fn()
 		if err != nil {
 			if errors.Is(err, store.ErrKeyNotFound) {
 				reject(NewError(KeyNotFoundError, err.Error()))
@@ -81,105 +51,71 @@ func (k *KV) Get(key sobek.Value) *sobek.Promise {
 			reject(err)
 			return
 		}
-
-		// Convert the value to a JavaScript value
-		jsValue := k.vu.Runtime().ToValue(value)
-		resolve(jsValue)
+		resolve(value)
 	}()
-
 	return promise
+}
+
+// Set sets the value of a key in the store.
+//
+// If the key does not exist, it is created. If the key already exists, its value is overwritten.
+func (k *KV) Set(key sobek.Value, value sobek.Value) *sobek.Promise {
+	keyString := key.String()
+	exportedValue := value.Export()
+	return k.async(func() (any, error) {
+		if err := k.store.Set(keyString, exportedValue); err != nil {
+			return nil, err
+		}
+		return value, nil
+	})
+}
+
+// Get returns the value of a key in the store.
+func (k *KV) Get(key sobek.Value) *sobek.Promise {
+	keyString := key.String()
+	return k.async(func() (any, error) {
+		value, err := k.store.Get(keyString)
+		if err != nil {
+			return nil, err
+		}
+		return k.vu.Runtime().ToValue(value), nil
+	})
 }
 
 // Delete deletes a key from the store.
 func (k *KV) Delete(key sobek.Value) *sobek.Promise {
-	promise, resolve, reject := promises.New(k.vu)
-
 	keyString := key.String()
-
-	go func() {
-		if k.store == nil {
-			reject(NewError(DatabaseNotOpenError, "database is not open"))
-			return
+	return k.async(func() (any, error) {
+		if err := k.store.Delete(keyString); err != nil {
+			return nil, err
 		}
-
-		err := k.store.Delete(keyString)
-		if err != nil {
-			reject(err)
-			return
-		}
-
-		resolve(true)
-	}()
-
-	return promise
+		return true, nil
+	})
 }
 
 // Exists checks if a given key exists.
 func (k *KV) Exists(key sobek.Value) *sobek.Promise {
-	promise, resolve, reject := promises.New(k.vu)
-
 	keyString := key.String()
-
-	go func() {
-		if k.store == nil {
-			reject(NewError(DatabaseNotOpenError, "database is not open"))
-			return
-		}
-
-		exists, err := k.store.Exists(keyString)
-		if err != nil {
-			reject(err)
-			return
-		}
-
-		resolve(exists)
-	}()
-
-	return promise
+	return k.async(func() (any, error) {
+		return k.store.Exists(keyString)
+	})
 }
 
 // Clear deletes all the keys in the store.
 func (k *KV) Clear() *sobek.Promise {
-	promise, resolve, reject := promises.New(k.vu)
-
-	go func() {
-		if k.store == nil {
-			reject(NewError(DatabaseNotOpenError, "database is not open"))
-			return
+	return k.async(func() (any, error) {
+		if err := k.store.Clear(); err != nil {
+			return nil, err
 		}
-
-		err := k.store.Clear()
-		if err != nil {
-			reject(err)
-			return
-		}
-
-		resolve(true)
-	}()
-
-	return promise
+		return true, nil
+	})
 }
 
 // Size returns the number of keys in the store.
 func (k *KV) Size() *sobek.Promise {
-	promise, resolve, reject := promises.New(k.vu)
-
-	go func() {
-		if k.store == nil {
-			reject(NewError(DatabaseNotOpenError, "database is not open"))
-			return
-		}
-
-		size, err := k.store.Size()
-		if err != nil {
-			reject(err)
-			return
-		}
-
-		resolve(size)
-	}()
-
-	return promise
+	return k.async(func() (any, error) {
+		return k.store.Size()
+	})
 }
 
 // Close closes the KV instance.
@@ -190,42 +126,22 @@ func (k *KV) Close() error {
 // List returns all the key-value pairs in the store.
 //
 // The returned list is ordered lexicographically by key.
-// The returned list is limited to 1000 entries by default.
 // The returned list can be limited to a maximum number of entries by passing a limit option.
 // The returned list can be limited to keys that start with a given prefix by passing a prefix option.
-// See [ListOptions] for more details
+// See [ListOptions] for more details.
 func (k *KV) List(options sobek.Value) *sobek.Promise {
-	promise, resolve, reject := promises.New(k.vu)
-
-	// Import list options from JavaScript
 	listOptions := ImportListOptions(k.vu.Runtime(), options)
-
-	go func() {
-		if k.store == nil {
-			reject(NewError(DatabaseNotOpenError, "database is not open"))
-			return
-		}
-
-		// Use the store interface to list entries
+	return k.async(func() (any, error) {
 		entries, err := k.store.List(listOptions.Prefix, listOptions.Limit)
 		if err != nil {
-			reject(err)
-			return
+			return nil, err
 		}
-
-		// Convert entries to ListEntry format for JavaScript
 		jsEntries := make([]ListEntry, len(entries))
 		for i, entry := range entries {
-			jsEntries[i] = ListEntry{
-				Key:   entry.Key,
-				Value: entry.Value,
-			}
+			jsEntries[i] = ListEntry{Key: entry.Key, Value: entry.Value}
 		}
-
-		resolve(k.vu.Runtime().ToValue(jsEntries))
-	}()
-
-	return promise
+		return k.vu.Runtime().ToValue(jsEntries), nil
+	})
 }
 
 // ListEntry is a key-value pair returned by KV.List().
