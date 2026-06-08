@@ -1,6 +1,8 @@
 package kv
 
 import (
+	"errors"
+
 	"github.com/grafana/sobek"
 	"go.k6.io/k6/v2/js/common"
 	"go.k6.io/k6/v2/js/modules"
@@ -72,6 +74,10 @@ func (k *KV) Get(key sobek.Value) *sobek.Promise {
 
 		value, err := k.store.Get(keyString)
 		if err != nil {
+			if errors.Is(err, store.ErrKeyNotFound) {
+				reject(NewError(KeyNotFoundError, err.Error()))
+				return
+			}
 			reject(err)
 			return
 		}
