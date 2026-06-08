@@ -11,13 +11,21 @@ import (
 func TestNewDiskStore(t *testing.T) {
 	t.Parallel()
 
-	store := NewDiskStore()
+	// Empty path falls back to the default location.
+	store := NewDiskStore("")
 	if store == nil {
 		t.Fatal("NewDiskStore() returned nil")
 	}
 	if store.path != DefaultDiskStorePath {
-		t.Fatalf("NewDiskStore() returned a store with unexpected path, got %s, want %s", store.path, DefaultDiskStorePath)
+		t.Fatalf("NewDiskStore(\"\") returned a store with unexpected path, got %s, want %s", store.path, DefaultDiskStorePath)
 	}
+
+	// Explicit path is honored.
+	custom := NewDiskStore("/tmp/custom.db")
+	if custom.path != "/tmp/custom.db" {
+		t.Fatalf("NewDiskStore() did not honor explicit path, got %s, want /tmp/custom.db", custom.path)
+	}
+
 	if store.handle == nil {
 		t.Fatal("NewDiskStore() returned a store with nil handle")
 	}
@@ -35,8 +43,7 @@ func TestDiskStore_Get(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
-	store.path = tempFile
+	store := NewDiskStore(tempFile)
 
 	// Test getting a non-existent key
 	_, err := store.Get("non-existent")
@@ -69,8 +76,7 @@ func TestDiskStore_Set(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
-	store.path = tempFile
+	store := NewDiskStore(tempFile)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
@@ -97,8 +103,7 @@ func TestDiskStore_Delete(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
-	store.path = tempFile
+	store := NewDiskStore(tempFile)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
@@ -138,8 +143,7 @@ func TestDiskStore_Exists(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
-	store.path = tempFile
+	store := NewDiskStore(tempFile)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
@@ -175,8 +179,7 @@ func TestDiskStore_Clear(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
-	store.path = tempFile
+	store := NewDiskStore(tempFile)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
@@ -214,8 +217,7 @@ func TestDiskStore_Size(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
-	store.path = tempFile
+	store := NewDiskStore(tempFile)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
@@ -255,8 +257,7 @@ func TestDiskStore_List(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
-	store.path = tempFile
+	store := NewDiskStore(tempFile)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
@@ -351,8 +352,7 @@ func TestDiskStore_Close(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
-	store.path = tempFile
+	store := NewDiskStore(tempFile)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
@@ -382,8 +382,7 @@ func TestDiskStore_RefCount(t *testing.T) {
 	tempFile := setupTempDiskStore(t)
 	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-	store := NewDiskStore()
-	store.path = tempFile
+	store := NewDiskStore(tempFile)
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
@@ -729,8 +728,7 @@ func TestDiskStore_TableDriven(t *testing.T) {
 			tempFile := setupTempDiskStore(t)
 			defer os.Remove(tempFile) //nolint:errcheck,forbidigo
 
-			store := NewDiskStore()
-			store.path = tempFile
+			store := NewDiskStore(tempFile)
 			t.Cleanup(func() {
 				_ = store.Close()
 			})

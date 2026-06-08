@@ -16,8 +16,7 @@ func BenchmarkDiskStore_Get(b *testing.B) {
 	tempFile.Close()
 	defer os.Remove(tempFile.Name())
 
-	store := NewDiskStore()
-	store.path = tempFile.Name()
+	store := NewDiskStore(tempFile.Name())
 
 	// Setup: Add some data to the store
 	for i := range 1000 {
@@ -52,8 +51,7 @@ func BenchmarkDiskStore_Set(b *testing.B) {
 	tempFile.Close()
 	defer os.Remove(tempFile.Name())
 
-	store := NewDiskStore()
-	store.path = tempFile.Name()
+	store := NewDiskStore(tempFile.Name())
 
 	// Reset the timer before the actual benchmark
 	b.ResetTimer()
@@ -84,8 +82,7 @@ func BenchmarkDiskStore_Delete(b *testing.B) {
 			tempFile.Close()
 			defer os.Remove(tempFile.Name())
 
-			store := NewDiskStore()
-			store.path = tempFile.Name()
+			store := NewDiskStore(tempFile.Name())
 
 			// Setup: Add data to the store
 			for i := range size {
@@ -130,8 +127,7 @@ func BenchmarkDiskStore_Exists(b *testing.B) {
 	tempFile.Close()
 	defer os.Remove(tempFile.Name())
 
-	store := NewDiskStore()
-	store.path = tempFile.Name()
+	store := NewDiskStore(tempFile.Name())
 
 	// Setup: Add some data to the store
 	for i := range 1000 {
@@ -166,8 +162,7 @@ func BenchmarkDiskStore_List(b *testing.B) {
 	tempFile.Close()
 	defer os.Remove(tempFile.Name())
 
-	store := NewDiskStore()
-	store.path = tempFile.Name()
+	store := NewDiskStore(tempFile.Name())
 
 	// Setup: Add some data to the store
 	for i := range 1000 {
@@ -232,8 +227,7 @@ func BenchmarkDiskStore_Concurrent(b *testing.B) {
 	tempFile.Close()
 	defer os.Remove(tempFile.Name())
 
-	store := NewDiskStore()
-	store.path = tempFile.Name()
+	store := NewDiskStore(tempFile.Name())
 
 	// Setup: Add some data to the store
 	for i := range 1000 {

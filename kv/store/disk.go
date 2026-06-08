@@ -31,10 +31,15 @@ const (
 	DefaultKvBucket = "k6"
 )
 
-// NewDiskStore creates a new DiskStore instance.
-func NewDiskStore() *DiskStore {
+// NewDiskStore creates a new DiskStore that will open its BoltDB database at
+// the given path on the first operation. An empty path falls back to
+// DefaultDiskStorePath.
+func NewDiskStore(path string) *DiskStore {
+	if path == "" {
+		path = DefaultDiskStorePath
+	}
 	return &DiskStore{
-		path:   DefaultDiskStorePath,
+		path:   path,
 		handle: new(bolt.DB),
 	}
 }

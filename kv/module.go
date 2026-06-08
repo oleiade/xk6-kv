@@ -76,7 +76,7 @@ func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 		case "memory":
 			backend = store.NewMemoryStore()
 		case "disk":
-			backend = store.NewDiskStore()
+			backend = store.NewDiskStore(store.DefaultDiskStorePath)
 		}
 
 		var serializer store.Serializer
