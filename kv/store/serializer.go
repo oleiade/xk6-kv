@@ -35,15 +35,16 @@ func (s *JSONSerializer) Serialize(value any) ([]byte, error) {
 }
 
 // Deserialize converts a JSON byte slice back to a value.
+//
+// Empty input is treated as the absence of a value, surfaced to callers as
+// a JS-side null with no error — empty bytes are a legitimate stored value.
 func (s *JSONSerializer) Deserialize(data []byte) (any, error) {
-	var err error
-
 	if len(data) == 0 {
-		return nil, err
+		return nil, nil //nolint:nilnil
 	}
 
 	var value any
-	if err = json.Unmarshal(data, &value); err != nil {
+	if err := json.Unmarshal(data, &value); err != nil {
 		return nil, fmt.Errorf("unable to deserialize JSON value: %w", err)
 	}
 	return value, nil

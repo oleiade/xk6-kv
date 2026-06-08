@@ -236,22 +236,17 @@ type ListOptions struct {
 
 	// Limit is the maximum number of entries to return.
 	Limit int64 `json:"limit"`
-
-	limitSet bool
 }
 
 // ImportListOptions instantiates a ListOptions from a sobek.Value.
 func ImportListOptions(rt *sobek.Runtime, options sobek.Value) ListOptions {
 	listOptions := ListOptions{}
 
-	// If no options are passed, return the default options
 	if common.IsNullish(options) {
 		return listOptions
 	}
 
-	// Interpret the options as an object
 	optionsObj := options.ToObject(rt)
-
 	listOptions.Prefix = optionsObj.Get("prefix").String()
 
 	limitValue := optionsObj.Get("limit")
@@ -260,10 +255,8 @@ func ImportListOptions(rt *sobek.Runtime, options sobek.Value) ListOptions {
 	}
 
 	var limit int64
-	err := rt.ExportTo(limitValue, &limit)
-	if err == nil {
+	if err := rt.ExportTo(limitValue, &limit); err == nil {
 		listOptions.Limit = limit
-		listOptions.limitSet = true
 	}
 
 	return listOptions
