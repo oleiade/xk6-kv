@@ -55,14 +55,8 @@ func TestDiskStore_Get(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() on existing key returned an error: %v", err)
 	}
-
-	valueBytes, ok := value.([]byte)
-	if !ok {
-		t.Fatalf("Get() returned a value of unexpected type, got %T, want []byte", value)
-	}
-
-	if string(valueBytes) != string(expectedValue) {
-		t.Fatalf("Get() returned unexpected value, got %s, want %s", string(valueBytes), string(expectedValue))
+	if string(value) != string(expectedValue) {
+		t.Fatalf("Get() returned unexpected value, got %s, want %s", string(value), string(expectedValue))
 	}
 
 	// Clean up
@@ -81,49 +75,18 @@ func TestDiskStore_Set(t *testing.T) {
 		_ = store.Close()
 	})
 
-	// Test setting a string value
-	err := store.Set("string-key", "string-value")
-	if err != nil {
-		t.Fatalf("Set() with string value returned an error: %v", err)
-	}
-
-	// Verify the value was stored correctly
-	value, err := store.Get("string-key")
-	if err != nil {
-		t.Fatalf("Failed to get value after Set(): %v", err)
-	}
-	valueBytes, ok := value.([]byte)
-	if !ok {
-		t.Fatalf("Get() after Set() returned a value of unexpected type, got %T, want []byte", value)
-	}
-	if string(valueBytes) != "string-value" {
-		t.Fatalf("Get() after Set() returned unexpected value, got %s, want %s", string(valueBytes), "string-value")
-	}
-
-	// Test setting a byte slice value
 	byteValue := []byte("byte-value")
-	err = store.Set("byte-key", byteValue)
+	err := store.Set("byte-key", byteValue)
 	if err != nil {
-		t.Fatalf("Set() with byte slice value returned an error: %v", err)
+		t.Fatalf("Set() returned an error: %v", err)
 	}
 
-	// Verify the value was stored correctly
-	value, err = store.Get("byte-key")
+	value, err := store.Get("byte-key")
 	if err != nil {
 		t.Fatalf("Failed to get value after Set(): %v", err)
 	}
-	valueBytes, ok = value.([]byte)
-	if !ok {
-		t.Fatalf("Get() after Set() returned a value of unexpected type, got %T, want []byte", value)
-	}
-	if string(valueBytes) != string(byteValue) {
-		t.Fatalf("Get() after Set() returned unexpected value, got %s, want %s", string(valueBytes), string(byteValue))
-	}
-
-	// Test setting an unsupported value type
-	err = store.Set("invalid-key", 123)
-	if err == nil {
-		t.Fatal("Set() with unsupported value type should return an error")
+	if string(value) != string(byteValue) {
+		t.Fatalf("Get() after Set() returned unexpected value, got %s, want %s", string(value), string(byteValue))
 	}
 }
 
@@ -141,7 +104,7 @@ func TestDiskStore_Delete(t *testing.T) {
 	})
 
 	// Setup
-	err := store.Set("test-key", "test-value")
+	err := store.Set("test-key", []byte("test-value"))
 	if err != nil {
 		t.Fatalf("Failed to set up test: %v", err)
 	}
@@ -191,7 +154,7 @@ func TestDiskStore_Exists(t *testing.T) {
 	}
 
 	// Test with existing key
-	err = store.Set("test-key", "test-value")
+	err = store.Set("test-key", []byte("test-value"))
 	if err != nil {
 		t.Fatalf("Failed to set up test: %v", err)
 	}
@@ -219,11 +182,11 @@ func TestDiskStore_Clear(t *testing.T) {
 	})
 
 	// Setup
-	err := store.Set("key1", "value1")
+	err := store.Set("key1", []byte("value1"))
 	if err != nil {
 		t.Fatalf("Failed to set up test: %v", err)
 	}
-	err = store.Set("key2", "value2")
+	err = store.Set("key2", []byte("value2"))
 	if err != nil {
 		t.Fatalf("Failed to set up test: %v", err)
 	}
@@ -267,11 +230,11 @@ func TestDiskStore_Size(t *testing.T) {
 	}
 
 	// Test non-empty store
-	err = store.Set("key1", "value1")
+	err = store.Set("key1", []byte("value1"))
 	if err != nil {
 		t.Fatalf("Failed to set up test: %v", err)
 	}
-	err = store.Set("key2", "value2")
+	err = store.Set("key2", []byte("value2"))
 	if err != nil {
 		t.Fatalf("Failed to set up test: %v", err)
 	}
@@ -317,7 +280,7 @@ func TestDiskStore_List(t *testing.T) {
 	}
 
 	for k, v := range testData {
-		err := store.Set(k, v)
+		err := store.Set(k, []byte(v))
 		if err != nil {
 			t.Fatalf("Failed to set up test: %v", err)
 		}
@@ -395,7 +358,7 @@ func TestDiskStore_Close(t *testing.T) {
 	})
 
 	// Open the store by performing an operation
-	err := store.Set("key", "value")
+	err := store.Set("key", []byte("value"))
 	if err != nil {
 		t.Fatalf("Failed to set up test: %v", err)
 	}
@@ -426,7 +389,7 @@ func TestDiskStore_RefCount(t *testing.T) {
 	})
 
 	// Open the store by performing an operation
-	err := store.Set("key", "value")
+	err := store.Set("key", []byte("value"))
 	if err != nil {
 		t.Fatalf("Failed to set up test: %v", err)
 	}
@@ -510,7 +473,7 @@ func TestDiskStore_TableDriven(t *testing.T) {
 				// No setup needed
 			},
 			operation: func(s *DiskStore) (any, error) {
-				err := s.Set("key", "value")
+				err := s.Set("key", []byte("value"))
 				if err != nil {
 					return nil, err
 				}
@@ -554,7 +517,7 @@ func TestDiskStore_TableDriven(t *testing.T) {
 		{
 			name: "Delete existing key",
 			setup: func(s *DiskStore) {
-				_ = s.Set("key", "value")
+				_ = s.Set("key", []byte("value"))
 			},
 			operation: func(s *DiskStore) (any, error) {
 				err := s.Delete("key")
@@ -586,8 +549,8 @@ func TestDiskStore_TableDriven(t *testing.T) {
 		{
 			name: "Clear store",
 			setup: func(s *DiskStore) {
-				_ = s.Set("key1", "value1")
-				_ = s.Set("key2", "value2")
+				_ = s.Set("key1", []byte("value1"))
+				_ = s.Set("key2", []byte("value2"))
 			},
 			operation: func(s *DiskStore) (any, error) {
 				err := s.Clear()
@@ -622,7 +585,7 @@ func TestDiskStore_TableDriven(t *testing.T) {
 			},
 			operation: func(s *DiskStore) (any, error) {
 				// Perform operations to increment reference count
-				err := s.Set("key", "value")
+				err := s.Set("key", []byte("value"))
 				if err != nil {
 					return nil, err
 				}
@@ -663,9 +626,9 @@ func TestDiskStore_TableDriven(t *testing.T) {
 		{
 			name: "List entries with prefix",
 			setup: func(s *DiskStore) {
-				_ = s.Set("prefix1", "value1")
-				_ = s.Set("prefix2", "value2")
-				_ = s.Set("other", "value3")
+				_ = s.Set("prefix1", []byte("value1"))
+				_ = s.Set("prefix2", []byte("value2"))
+				_ = s.Set("other", []byte("value3"))
 			},
 			operation: func(s *DiskStore) (any, error) {
 				return s.List("prefix", 0)
@@ -675,9 +638,9 @@ func TestDiskStore_TableDriven(t *testing.T) {
 					t.Fatalf("Unexpected error: %v", err)
 				}
 
-				entries, ok := result.([]Entry)
+				entries, ok := result.([]RawEntry)
 				if !ok {
-					t.Fatalf("Expected []Entry, got %T", result)
+					t.Fatalf("Expected []RawEntry, got %T", result)
 				}
 
 				if len(entries) != 2 {
@@ -698,9 +661,9 @@ func TestDiskStore_TableDriven(t *testing.T) {
 		{
 			name: "List entries with limit",
 			setup: func(s *DiskStore) {
-				_ = s.Set("key1", "value1")
-				_ = s.Set("key2", "value2")
-				_ = s.Set("key3", "value3")
+				_ = s.Set("key1", []byte("value1"))
+				_ = s.Set("key2", []byte("value2"))
+				_ = s.Set("key3", []byte("value3"))
 			},
 			operation: func(s *DiskStore) (any, error) {
 				return s.List("", 2)
@@ -710,9 +673,9 @@ func TestDiskStore_TableDriven(t *testing.T) {
 					t.Fatalf("Unexpected error: %v", err)
 				}
 
-				entries, ok := result.([]Entry)
+				entries, ok := result.([]RawEntry)
 				if !ok {
-					t.Fatalf("Expected []Entry, got %T", result)
+					t.Fatalf("Expected []RawEntry, got %T", result)
 				}
 
 				if len(entries) != 2 {
@@ -726,9 +689,9 @@ func TestDiskStore_TableDriven(t *testing.T) {
 		{
 			name: "List entries with prefix and limit",
 			setup: func(s *DiskStore) {
-				_ = s.Set("prefix1", "value1")
-				_ = s.Set("prefix2", "value2")
-				_ = s.Set("other", "value3")
+				_ = s.Set("prefix1", []byte("value1"))
+				_ = s.Set("prefix2", []byte("value2"))
+				_ = s.Set("other", []byte("value3"))
 			},
 			operation: func(s *DiskStore) (any, error) {
 				return s.List("prefix", 1)
@@ -738,9 +701,9 @@ func TestDiskStore_TableDriven(t *testing.T) {
 					t.Fatalf("Unexpected error: %v", err)
 				}
 
-				entries, ok := result.([]Entry)
+				entries, ok := result.([]RawEntry)
 				if !ok {
-					t.Fatalf("Expected []Entry, got %T", result)
+					t.Fatalf("Expected []RawEntry, got %T", result)
 				}
 
 				if len(entries) != 1 {

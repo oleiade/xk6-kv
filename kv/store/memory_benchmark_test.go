@@ -12,7 +12,7 @@ func BenchmarkMemoryStore_Get(b *testing.B) {
 	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -38,7 +38,7 @@ func BenchmarkMemoryStore_Set(b *testing.B) {
 	for i := range b.N {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		_ = store.Set(key, value)
+		_ = store.Set(key, []byte(value))
 	}
 }
 
@@ -54,7 +54,7 @@ func BenchmarkMemoryStore_Delete(b *testing.B) {
 			for i := range size {
 				key := fmt.Sprintf("key-%d", i)
 				value := fmt.Sprintf("value-%d", i)
-				err := store.Set(key, value)
+				err := store.Set(key, []byte(value))
 				if err != nil {
 					b.Fatalf("Failed to set up benchmark: %v", err)
 				}
@@ -71,7 +71,7 @@ func BenchmarkMemoryStore_Delete(b *testing.B) {
 				// Re-add the key for the next iteration
 				if i < b.N-1 {
 					value := fmt.Sprintf("value-%d", i%size)
-					_ = store.Set(key, value)
+					_ = store.Set(key, []byte(value))
 				}
 			}
 		})
@@ -85,7 +85,7 @@ func BenchmarkMemoryStore_Exists(b *testing.B) {
 	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -108,7 +108,7 @@ func BenchmarkMemoryStore_List(b *testing.B) {
 	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -118,7 +118,7 @@ func BenchmarkMemoryStore_List(b *testing.B) {
 	for i := range 100 {
 		key := fmt.Sprintf("prefix-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -161,7 +161,7 @@ func BenchmarkMemoryStore_Concurrent(b *testing.B) {
 	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -181,7 +181,7 @@ func BenchmarkMemoryStore_Concurrent(b *testing.B) {
 			} else {
 				key := fmt.Sprintf("key-%d", i%1000)
 				value := fmt.Sprintf("value-%d", i)
-				_ = store.Set(key, value)
+				_ = store.Set(key, []byte(value))
 			}
 			i++
 		}

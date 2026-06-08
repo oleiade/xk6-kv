@@ -7,22 +7,25 @@ import (
 	"sync"
 )
 
-// MemoryStore is an in-memory key-value store.
+// MemoryStore is an in-memory Backend. Values are kept as raw bytes and
+// guarded by an RWMutex.
 type MemoryStore struct {
 	mu        sync.RWMutex
 	container map[string][]byte
 }
 
+// Ensure MemoryStore implements the Backend interface.
+var _ Backend = (*MemoryStore)(nil)
+
 // NewMemoryStore creates a new MemoryStore.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		mu:        sync.RWMutex{},
 		container: map[string][]byte{},
 	}
 }
 
 // Get returns the value for a given key.
-func (s *MemoryStore) Get(key string) (any, error) {
+func (s *MemoryStore) Get(key string) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -30,28 +33,14 @@ func (s *MemoryStore) Get(key string) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("memory store: %w: %s", ErrKeyNotFound, key)
 	}
-
-	// Return the raw bytes - serialization will be handled by the SerializedStore wrapper
 	return value, nil
 }
 
 // Set sets the value for a given key.
-func (s *MemoryStore) Set(key string, value any) error {
+func (s *MemoryStore) Set(key string, value []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	// Convert value to bytes if it's not already
-	var valueBytes []byte
-	switch v := value.(type) {
-	case []byte:
-		valueBytes = v
-	case string:
-		valueBytes = []byte(v)
-	default:
-		return fmt.Errorf("unsupported value type for memory store: %T", value)
-	}
-
-	s.container[key] = valueBytes
+	s.container[key] = value
 	return nil
 }
 
@@ -79,19 +68,19 @@ func (s *MemoryStore) Clear() error {
 	return nil
 }
 
-// Size returns the size of the store.
+// Size returns the number of keys in the store.
 func (s *MemoryStore) Size() (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return int64(len(s.container)), nil
 }
 
-// List returns all key-value pairs in the store, optionally filtered by prefix and limited to a maximum count.
-func (s *MemoryStore) List(prefix string, limit int64) ([]Entry, error) {
+// List returns key-value pairs sorted lexicographically by key, optionally
+// filtered by prefix and capped at limit (when > 0).
+func (s *MemoryStore) List(prefix string, limit int64) ([]RawEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Sort keys for consistent ordering
 	keys := make([]string, 0, len(s.container))
 	for k := range s.container {
 		if prefix == "" || strings.HasPrefix(k, prefix) {
@@ -100,29 +89,18 @@ func (s *MemoryStore) List(prefix string, limit int64) ([]Entry, error) {
 	}
 	sort.Strings(keys)
 
-	var entries []Entry
-	var count int64
-
-	// Apply limit if set
-	hasLimit := limit > 0
-	for _, k := range keys {
-		if hasLimit && count >= limit {
-			break
-		}
-
-		entries = append(entries, Entry{
-			Key:   k,
-			Value: s.container[k],
-		})
-		count++
+	if limit > 0 && int64(len(keys)) > limit {
+		keys = keys[:limit]
 	}
 
+	entries := make([]RawEntry, len(keys))
+	for i, k := range keys {
+		entries[i] = RawEntry{Key: k, Value: s.container[k]}
+	}
 	return entries, nil
 }
 
-// Close closes the store.
-//
-// This is a no-op for the MemoryStore.
+// Close is a no-op for the in-memory backend.
 func (s *MemoryStore) Close() error {
 	return nil
 }

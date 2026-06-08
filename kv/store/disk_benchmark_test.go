@@ -23,7 +23,7 @@ func BenchmarkDiskStore_Get(b *testing.B) {
 	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -62,7 +62,7 @@ func BenchmarkDiskStore_Set(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		_ = store.Set(key, value)
+		_ = store.Set(key, []byte(value))
 	}
 
 	// Clean up
@@ -91,7 +91,7 @@ func BenchmarkDiskStore_Delete(b *testing.B) {
 			for i := range size {
 				key := fmt.Sprintf("key-%d", i)
 				value := fmt.Sprintf("value-%d", i)
-				err := store.Set(key, value)
+				err := store.Set(key, []byte(value))
 				if err != nil {
 					b.Fatalf("Failed to set up benchmark: %v", err)
 				}
@@ -109,7 +109,7 @@ func BenchmarkDiskStore_Delete(b *testing.B) {
 				if i < b.N-1 {
 					b.StopTimer()
 					value := fmt.Sprintf("value-%d", i%size)
-					_ = store.Set(key, value)
+					_ = store.Set(key, []byte(value))
 					b.StartTimer()
 				}
 			}
@@ -137,7 +137,7 @@ func BenchmarkDiskStore_Exists(b *testing.B) {
 	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -173,7 +173,7 @@ func BenchmarkDiskStore_List(b *testing.B) {
 	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -183,7 +183,7 @@ func BenchmarkDiskStore_List(b *testing.B) {
 	for i := range 100 {
 		key := fmt.Sprintf("prefix-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -239,7 +239,7 @@ func BenchmarkDiskStore_Concurrent(b *testing.B) {
 	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
-		err := store.Set(key, value)
+		err := store.Set(key, []byte(value))
 		if err != nil {
 			b.Fatalf("Failed to set up benchmark: %v", err)
 		}
@@ -259,7 +259,7 @@ func BenchmarkDiskStore_Concurrent(b *testing.B) {
 			} else {
 				key := fmt.Sprintf("key-%d", i%1000)
 				value := fmt.Sprintf("value-%d", i)
-				_ = store.Set(key, value)
+				_ = store.Set(key, []byte(value))
 			}
 			i++
 		}

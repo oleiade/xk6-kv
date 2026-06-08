@@ -71,16 +71,14 @@ func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 	}
 
 	if mi.rm.store == nil {
-		// Create the base store based on the backend option
-		var baseStore store.Store
+		var backend store.Backend
 		switch options.Backend {
 		case "memory":
-			baseStore = store.NewMemoryStore()
+			backend = store.NewMemoryStore()
 		case "disk":
-			baseStore = store.NewDiskStore()
+			backend = store.NewDiskStore()
 		}
 
-		// Create the serializer based on the serialization option
 		var serializer store.Serializer
 		switch options.Serialization {
 		case "json":
@@ -88,11 +86,10 @@ func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 		case "string":
 			serializer = store.NewStringSerializer()
 		default:
-			serializer = store.NewJSONSerializer() // Default to JSON
+			serializer = store.NewJSONSerializer()
 		}
 
-		// Create a serialized store with the chosen store and serializer
-		mi.rm.store = store.NewSerializedStore(baseStore, serializer)
+		mi.rm.store = store.NewSerializedStore(backend, serializer)
 	}
 
 	kv := NewKV(mi.vu, mi.rm.store)

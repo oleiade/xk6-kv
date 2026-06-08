@@ -39,14 +39,8 @@ func TestMemoryStore_Get(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() on existing key returned an error: %v", err)
 	}
-
-	valueBytes, ok := value.([]byte)
-	if !ok {
-		t.Fatalf("Get() returned a value of unexpected type, got %T, want []byte", value)
-	}
-
-	if string(valueBytes) != string(expectedValue) {
-		t.Fatalf("Get() returned unexpected value, got %s, want %s", string(valueBytes), string(expectedValue))
+	if string(value) != string(expectedValue) {
+		t.Fatalf("Get() returned unexpected value, got %s, want %s", string(value), string(expectedValue))
 	}
 }
 
@@ -55,39 +49,18 @@ func TestMemoryStore_Set(t *testing.T) {
 
 	store := NewMemoryStore()
 
-	// Test setting a string value
-	err := store.Set("string-key", "string-value")
-	if err != nil {
-		t.Fatalf("Set() with string value returned an error: %v", err)
-	}
-
-	value, exists := store.container["string-key"]
-	if !exists {
-		t.Fatal("Set() with string value did not store the key")
-	}
-	if string(value) != "string-value" {
-		t.Fatalf("Set() with string value stored unexpected value, got %s, want %s", string(value), "string-value")
-	}
-
-	// Test setting a byte slice value
 	byteValue := []byte("byte-value")
-	err = store.Set("byte-key", byteValue)
+	err := store.Set("byte-key", byteValue)
 	if err != nil {
 		t.Fatalf("Set() with byte slice value returned an error: %v", err)
 	}
 
-	value, exists = store.container["byte-key"]
+	value, exists := store.container["byte-key"]
 	if !exists {
-		t.Fatal("Set() with byte slice value did not store the key")
+		t.Fatal("Set() did not store the key")
 	}
 	if string(value) != string(byteValue) {
-		t.Fatalf("Set() with byte slice value stored unexpected value, got %s, want %s", string(value), string(byteValue))
-	}
-
-	// Test setting an unsupported value type
-	err = store.Set("invalid-key", 123)
-	if err == nil {
-		t.Fatal("Set() with unsupported value type should return an error")
+		t.Fatalf("Set() stored unexpected value, got %s, want %s", string(value), string(byteValue))
 	}
 }
 
@@ -214,7 +187,7 @@ func TestMemoryStore_List(t *testing.T) {
 	}
 
 	for k, v := range testData {
-		err := store.Set(k, v)
+		err := store.Set(k, []byte(v))
 		if err != nil {
 			t.Fatalf("Failed to set up test: %v", err)
 		}
@@ -295,7 +268,7 @@ func TestMemoryStore_Concurrency(t *testing.T) {
 	// Test concurrent reads and writes
 	go func() {
 		for range 100 {
-			store.Set("key", "value") //nolint:errcheck
+			store.Set("key", []byte("value")) //nolint:errcheck,gosec
 		}
 		done <- true
 	}()
@@ -369,9 +342,9 @@ func TestMemoryStore_TableDriven(t *testing.T) {
 					t.Fatalf("Unexpected error: %v", err)
 				}
 
-				entries, ok := result.([]Entry)
+				entries, ok := result.([]RawEntry)
 				if !ok {
-					t.Fatalf("Expected []Entry, got %T", result)
+					t.Fatalf("Expected []RawEntry, got %T", result)
 				}
 
 				if len(entries) != 2 {
@@ -406,9 +379,9 @@ func TestMemoryStore_TableDriven(t *testing.T) {
 					t.Fatalf("Unexpected error: %v", err)
 				}
 
-				entries, ok := result.([]Entry)
+				entries, ok := result.([]RawEntry)
 				if !ok {
-					t.Fatalf("Expected []Entry, got %T", result)
+					t.Fatalf("Expected []RawEntry, got %T", result)
 				}
 
 				if len(entries) != 2 {
