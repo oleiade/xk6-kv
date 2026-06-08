@@ -3,8 +3,7 @@
 package store
 
 import (
-	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 )
 
@@ -12,731 +11,112 @@ func TestNewDiskStore(t *testing.T) {
 	t.Parallel()
 
 	// Empty path falls back to the default location.
-	store := NewDiskStore("")
-	if store == nil {
+	s := NewDiskStore("")
+	if s == nil {
 		t.Fatal("NewDiskStore() returned nil")
 	}
-	if store.path != DefaultDiskStorePath {
-		t.Fatalf("NewDiskStore(\"\") returned a store with unexpected path, got %s, want %s", store.path, DefaultDiskStorePath)
+	if s.path != DefaultDiskStorePath {
+		t.Fatalf("NewDiskStore(\"\") path = %s, want %s", s.path, DefaultDiskStorePath)
 	}
 
 	// Explicit path is honored.
 	custom := NewDiskStore("/tmp/custom.db")
 	if custom.path != "/tmp/custom.db" {
-		t.Fatalf("NewDiskStore() did not honor explicit path, got %s, want /tmp/custom.db", custom.path)
+		t.Fatalf("NewDiskStore(/tmp/custom.db) path = %s", custom.path)
 	}
 
-	if store.handle == nil {
-		t.Fatal("NewDiskStore() returned a store with nil handle")
+	if s.handle == nil {
+		t.Fatal("NewDiskStore() handle is nil")
 	}
-	if store.opened.Load() {
-		t.Fatal("NewDiskStore() returned a store that is already marked as opened")
+	if s.opened.Load() {
+		t.Fatal("NewDiskStore() is already marked open")
 	}
-	if store.refCount.Load() != 0 {
-		t.Fatalf("NewDiskStore() returned a store with non-zero refCount, got %d", store.refCount.Load())
+	if s.refCount.Load() != 0 {
+		t.Fatalf("NewDiskStore() refCount = %d, want 0", s.refCount.Load())
 	}
 }
 
-func TestDiskStore_Get(t *testing.T) {
+// TestDiskStore_Contract verifies the on-disk backend against the shared
+// Backend contract. See store_contract_test.go for the cases covered.
+func TestDiskStore_Contract(t *testing.T) {
+	t.Parallel()
+	runBackendContract(t, newDiskStoreForTest)
+}
+
+// TestDiskStore_RefCountedClose checks the reference-counted Close semantics
+// that are specific to the disk backend: each operation that triggers an
+// implicit open() increments the refcount; Close decrements it and only
+// closes the underlying BoltDB when the count reaches zero.
+func TestDiskStore_RefCountedClose(t *testing.T) {
 	t.Parallel()
 
-	tempFile := setupTempDiskStore(t)
-	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+	s := newDiskStoreForTest(t).(*DiskStore)
 
-	store := NewDiskStore(tempFile)
-
-	// Test getting a non-existent key
-	_, err := store.Get("non-existent")
-	if err == nil {
-		t.Fatal("Get() on non-existent key should return an error")
+	if err := s.Set("k", []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if got := s.refCount.Load(); got != 1 {
+		t.Fatalf("refCount after Set = %d, want 1", got)
 	}
 
-	// Test getting an existing key
-	expectedValue := []byte("test-value")
-	err = store.Set("test-key", expectedValue)
-	if err != nil {
-		t.Fatalf("Failed to set up test: %v", err)
+	if _, err := s.Get("k"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := s.refCount.Load(); got != 2 {
+		t.Fatalf("refCount after Get = %d, want 2", got)
 	}
 
-	value, err := store.Get("test-key")
-	if err != nil {
-		t.Fatalf("Get() on existing key returned an error: %v", err)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
-	if string(value) != string(expectedValue) {
-		t.Fatalf("Get() returned unexpected value, got %s, want %s", string(value), string(expectedValue))
+	if got := s.refCount.Load(); got != 1 {
+		t.Fatalf("refCount after first Close = %d, want 1", got)
+	}
+	if !s.opened.Load() {
+		t.Fatal("store should still be open after first Close")
 	}
 
-	// Clean up
-	_ = store.Close()
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := s.refCount.Load(); got != 0 {
+		t.Fatalf("refCount after second Close = %d, want 0", got)
+	}
+	if s.opened.Load() {
+		t.Fatal("store should be closed after refcount reaches zero")
+	}
 }
 
-func TestDiskStore_Set(t *testing.T) {
+// TestDiskStore_PersistsAcrossReopen confirms data written through one
+// DiskStore handle is visible after the file is closed and reopened.
+func TestDiskStore_PersistsAcrossReopen(t *testing.T) {
 	t.Parallel()
 
-	tempFile := setupTempDiskStore(t)
-	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+	path := filepath.Join(t.TempDir(), "store.db")
 
-	store := NewDiskStore(tempFile)
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	byteValue := []byte("byte-value")
-	err := store.Set("byte-key", byteValue)
-	if err != nil {
-		t.Fatalf("Set() returned an error: %v", err)
+	writer := NewDiskStore(path)
+	if err := writer.Set("k", []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 
-	value, err := store.Get("byte-key")
+	reader := NewDiskStore(path)
+	t.Cleanup(func() { _ = reader.Close() })
+
+	got, err := reader.Get("k")
 	if err != nil {
-		t.Fatalf("Failed to get value after Set(): %v", err)
+		t.Fatalf("Get after reopen: %v", err)
 	}
-	if string(value) != string(byteValue) {
-		t.Fatalf("Get() after Set() returned unexpected value, got %s, want %s", string(value), string(byteValue))
+	if string(got) != "v" {
+		t.Fatalf("reopened Get returned %q, want %q", got, "v")
 	}
 }
 
-func TestDiskStore_Delete(t *testing.T) {
-	t.Parallel()
-
-	// Create a temporary file for testing
-	tempFile := setupTempDiskStore(t)
-	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
-
-	store := NewDiskStore(tempFile)
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	// Setup
-	err := store.Set("test-key", []byte("test-value"))
-	if err != nil {
-		t.Fatalf("Failed to set up test: %v", err)
-	}
-
-	// Test deleting an existing key
-	err = store.Delete("test-key")
-	if err != nil {
-		t.Fatalf("Delete() returned an error: %v", err)
-	}
-
-	// Verify the key was deleted
-	exists, err := store.Exists("test-key")
-	if err != nil {
-		t.Fatalf("Failed to check if key exists after Delete(): %v", err)
-	}
-	if exists {
-		t.Fatal("Delete() did not remove the key from the store")
-	}
-
-	// Test deleting a non-existent key (should not error)
-	err = store.Delete("non-existent")
-	if err != nil {
-		t.Fatalf("Delete() on non-existent key returned an error: %v", err)
-	}
-}
-
-func TestDiskStore_Exists(t *testing.T) {
-	t.Parallel()
-
-	// Create a temporary file for testing
-	tempFile := setupTempDiskStore(t)
-	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
-
-	store := NewDiskStore(tempFile)
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	// Test with non-existent key
-	exists, err := store.Exists("non-existent")
-	if err != nil {
-		t.Fatalf("Exists() returned an error: %v", err)
-	}
-	if exists {
-		t.Fatal("Exists() returned true for a non-existent key")
-	}
-
-	// Test with existing key
-	err = store.Set("test-key", []byte("test-value"))
-	if err != nil {
-		t.Fatalf("Failed to set up test: %v", err)
-	}
-
-	exists, err = store.Exists("test-key")
-	if err != nil {
-		t.Fatalf("Exists() returned an error: %v", err)
-	}
-	if !exists {
-		t.Fatal("Exists() returned false for an existing key")
-	}
-}
-
-func TestDiskStore_Clear(t *testing.T) {
-	t.Parallel()
-
-	// Create a temporary file for testing
-	tempFile := setupTempDiskStore(t)
-	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
-
-	store := NewDiskStore(tempFile)
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	// Setup
-	err := store.Set("key1", []byte("value1"))
-	if err != nil {
-		t.Fatalf("Failed to set up test: %v", err)
-	}
-	err = store.Set("key2", []byte("value2"))
-	if err != nil {
-		t.Fatalf("Failed to set up test: %v", err)
-	}
-
-	// Test clearing the store
-	err = store.Clear()
-	if err != nil {
-		t.Fatalf("Clear() returned an error: %v", err)
-	}
-
-	// Verify the store is empty
-	size, err := store.Size()
-	if err != nil {
-		t.Fatalf("Failed to get size after Clear(): %v", err)
-	}
-	if size != 0 {
-		t.Fatalf("Clear() did not empty the store, got %d items", size)
-	}
-}
-
-func TestDiskStore_Size(t *testing.T) {
-	t.Parallel()
-
-	// Create a temporary file for testing
-	tempFile := setupTempDiskStore(t)
-	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
-
-	store := NewDiskStore(tempFile)
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	// Test empty store
-	size, err := store.Size()
-	if err != nil {
-		t.Fatalf("Size() returned an error: %v", err)
-	}
-	if size != 0 {
-		t.Fatalf("Size() returned unexpected size for empty store, got %d, want 0", size)
-	}
-
-	// Test non-empty store
-	err = store.Set("key1", []byte("value1"))
-	if err != nil {
-		t.Fatalf("Failed to set up test: %v", err)
-	}
-	err = store.Set("key2", []byte("value2"))
-	if err != nil {
-		t.Fatalf("Failed to set up test: %v", err)
-	}
-
-	size, err = store.Size()
-	if err != nil {
-		t.Fatalf("Size() returned an error: %v", err)
-	}
-	if size != 2 {
-		t.Fatalf("Size() returned unexpected size, got %d, want 2", size)
-	}
-}
-
-func TestDiskStore_List(t *testing.T) {
-	t.Parallel()
-
-	// Create a temporary file for testing
-	tempFile := setupTempDiskStore(t)
-	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
-
-	store := NewDiskStore(tempFile)
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	// Test empty store
-	entries, err := store.List("", 0)
-	if err != nil {
-		t.Fatalf("List() returned an error: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("List() returned unexpected entries for empty store, got %d, want 0", len(entries))
-	}
-
-	// Add some data to the store
-	testData := map[string]string{
-		"key1":      "value1",
-		"key2":      "value2",
-		"prefix1":   "value3",
-		"prefix2":   "value4",
-		"different": "value5",
-	}
-
-	for k, v := range testData {
-		err := store.Set(k, []byte(v))
-		if err != nil {
-			t.Fatalf("Failed to set up test: %v", err)
-		}
-	}
-
-	// Test listing all entries (no prefix, no limit)
-	entries, err = store.List("", 0)
-	if err != nil {
-		t.Fatalf("List() returned an error: %v", err)
-	}
-	if len(entries) != len(testData) {
-		t.Fatalf("List() returned unexpected number of entries, got %d, want %d", len(entries), len(testData))
-	}
-
-	// Verify all keys are present
-	keyMap := make(map[string]bool)
-	for _, entry := range entries {
-		keyMap[entry.Key] = true
-	}
-	for k := range testData {
-		if !keyMap[k] {
-			t.Fatalf("List() did not return entry for key: %s", k)
-		}
-	}
-
-	// Test listing with prefix
-	entries, err = store.List("prefix", 0)
-	if err != nil {
-		t.Fatalf("List() with prefix returned an error: %v", err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("List() with prefix returned unexpected number of entries, got %d, want 2", len(entries))
-	}
-
-	// Verify only entries with the prefix are returned
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Key, "prefix") {
-			t.Fatalf("List() with prefix returned an entry without the prefix: %s", entry.Key)
-		}
-	}
-
-	// Test listing with limit
-	entries, err = store.List("", 2)
-	if err != nil {
-		t.Fatalf("List() with limit returned an error: %v", err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("List() with limit returned unexpected number of entries, got %d, want 2", len(entries))
-	}
-
-	// Test listing with prefix and limit
-	entries, err = store.List("prefix", 1)
-	if err != nil {
-		t.Fatalf("List() with prefix and limit returned an error: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("List() with prefix and limit returned unexpected number of entries, got %d, want 1", len(entries))
-	}
-	if !strings.HasPrefix(entries[0].Key, "prefix") {
-		t.Fatalf("List() with prefix and limit returned an entry without the prefix: %s", entries[0].Key)
-	}
-}
-
-func TestDiskStore_Close(t *testing.T) {
-	t.Parallel()
-
-	// Create a temporary file for testing
-	tempFile := setupTempDiskStore(t)
-	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
-
-	store := NewDiskStore(tempFile)
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	// Open the store by performing an operation
-	err := store.Set("key", []byte("value"))
-	if err != nil {
-		t.Fatalf("Failed to set up test: %v", err)
-	}
-
-	// Test closing the store
-	err = store.Close()
-	if err != nil {
-		t.Fatalf("Close() returned an error: %v", err)
-	}
-
-	// Verify the store is closed
-	if store.opened.Load() {
-		t.Fatal("Close() did not mark the store as closed")
-	}
-}
-
-func TestDiskStore_RefCount(t *testing.T) {
-	t.Parallel()
-
-	// Create a temporary file for testing
-	tempFile := setupTempDiskStore(t)
-	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
-
-	store := NewDiskStore(tempFile)
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-
-	// Open the store by performing an operation
-	err := store.Set("key", []byte("value"))
-	if err != nil {
-		t.Fatalf("Failed to set up test: %v", err)
-	}
-
-	// Verify the reference count is 1
-	if store.refCount.Load() != 1 {
-		t.Fatalf("Expected refCount to be 1 after first operation, got %d", store.refCount.Load())
-	}
-
-	// Perform another operation to increment the reference count
-	_, err = store.Get("key")
-	if err != nil {
-		t.Fatalf("Failed to perform operation: %v", err)
-	}
-
-	// Verify the reference count is 2
-	if store.refCount.Load() != 2 {
-		t.Fatalf("Expected refCount to be 2 after second operation, got %d", store.refCount.Load())
-	}
-
-	// Close the store once
-	err = store.Close()
-	if err != nil {
-		t.Fatalf("Close() returned an error: %v", err)
-	}
-
-	// Verify the reference count is 1
-	if store.refCount.Load() != 1 {
-		t.Fatalf("Expected refCount to be 1 after first close, got %d", store.refCount.Load())
-	}
-
-	// Verify the store is still open
-	if !store.opened.Load() {
-		t.Fatal("Store should still be open after first close")
-	}
-
-	// Close the store again
-	err = store.Close()
-	if err != nil {
-		t.Fatalf("Close() returned an error: %v", err)
-	}
-
-	// Verify the reference count is 0
-	if store.refCount.Load() != 0 {
-		t.Fatalf("Expected refCount to be 0 after second close, got %d", store.refCount.Load())
-	}
-
-	// Verify the store is closed
-	if store.opened.Load() {
-		t.Fatal("Store should be closed after second close")
-	}
-}
-
-// Helper function to set up a temporary disk store for testing
-func setupTempDiskStore(t *testing.T) string {
-	// Create a temporary file
-	tempFile, err := os.CreateTemp(t.TempDir(), "diskstore-test-*.db") //nolint:forbidigo
-	if err != nil {
-		t.Fatalf("Failed to create temporary file: %v", err)
-	}
-	tempFile.Close() //nolint:errcheck
-
-	return tempFile.Name()
-}
-
-// TestDiskStore_TableDriven demonstrates the table-driven testing approach
-func TestDiskStore_TableDriven(t *testing.T) {
-	t.Parallel()
-
-	// Define test cases
-	testCases := []struct {
-		name      string
-		setup     func(*DiskStore)
-		operation func(*DiskStore) (any, error)
-		validate  func(*testing.T, any, error)
-		cleanup   func(*DiskStore)
-	}{
-		{
-			name: "Set and Get string value",
-			setup: func(_ *DiskStore) {
-				// No setup needed
-			},
-			operation: func(s *DiskStore) (any, error) {
-				err := s.Set("key", []byte("value"))
-				if err != nil {
-					return nil, err
-				}
-				return s.Get("key")
-			},
-			validate: func(t *testing.T, result any, err error) {
-				if err != nil {
-					t.Fatalf("Unexpected error: %v", err)
-				}
-
-				bytes, ok := result.([]byte)
-				if !ok {
-					t.Fatalf("Expected []byte, got %T", result)
-				}
-
-				if string(bytes) != "value" {
-					t.Fatalf("Expected 'value', got '%s'", string(bytes))
-				}
-			},
-			cleanup: func(s *DiskStore) {
-				_ = s.Close()
-			},
-		},
-		{
-			name: "Get non-existent key",
-			setup: func(_ *DiskStore) {
-				// No setup needed
-			},
-			operation: func(s *DiskStore) (any, error) {
-				return s.Get("non-existent")
-			},
-			validate: func(t *testing.T, _ any, err error) {
-				if err == nil {
-					t.Fatal("Expected error, got nil")
-				}
-			},
-			cleanup: func(s *DiskStore) {
-				_ = s.Close()
-			},
-		},
-		{
-			name: "Delete existing key",
-			setup: func(s *DiskStore) {
-				_ = s.Set("key", []byte("value"))
-			},
-			operation: func(s *DiskStore) (any, error) {
-				err := s.Delete("key")
-				if err != nil {
-					return nil, err
-				}
-
-				exists, err := s.Exists("key")
-				return exists, err
-			},
-			validate: func(t *testing.T, result any, err error) {
-				if err != nil {
-					t.Fatalf("Unexpected error: %v", err)
-				}
-
-				exists, ok := result.(bool)
-				if !ok {
-					t.Fatalf("Expected bool, got %T", result)
-				}
-
-				if exists {
-					t.Fatal("Key should not exist after deletion")
-				}
-			},
-			cleanup: func(s *DiskStore) {
-				_ = s.Close()
-			},
-		},
-		{
-			name: "Clear store",
-			setup: func(s *DiskStore) {
-				_ = s.Set("key1", []byte("value1"))
-				_ = s.Set("key2", []byte("value2"))
-			},
-			operation: func(s *DiskStore) (any, error) {
-				err := s.Clear()
-				if err != nil {
-					return nil, err
-				}
-
-				return s.Size()
-			},
-			validate: func(t *testing.T, result any, err error) {
-				if err != nil {
-					t.Fatalf("Unexpected error: %v", err)
-				}
-
-				size, ok := result.(int64)
-				if !ok {
-					t.Fatalf("Expected int64, got %T", result)
-				}
-
-				if size != 0 {
-					t.Fatalf("Expected size 0, got %d", size)
-				}
-			},
-			cleanup: func(s *DiskStore) {
-				_ = s.Close()
-			},
-		},
-		{
-			name: "Reference counting",
-			setup: func(_ *DiskStore) {
-				// No setup needed
-			},
-			operation: func(s *DiskStore) (any, error) {
-				// Perform operations to increment reference count
-				err := s.Set("key", []byte("value"))
-				if err != nil {
-					return nil, err
-				}
-
-				_, err = s.Get("key")
-				if err != nil {
-					return nil, err
-				}
-
-				// Close once to decrement reference count
-				err = s.Close()
-				if err != nil {
-					return nil, err
-				}
-
-				// Store should still be open
-				return s.opened.Load(), nil
-			},
-			validate: func(t *testing.T, result any, err error) {
-				if err != nil {
-					t.Fatalf("Unexpected error: %v", err)
-				}
-
-				opened, ok := result.(bool)
-				if !ok {
-					t.Fatalf("Expected bool, got %T", result)
-				}
-
-				if !opened {
-					t.Fatal("Store should still be open after first close")
-				}
-			},
-			cleanup: func(s *DiskStore) {
-				// Close again to fully close the store
-				_ = s.Close()
-			},
-		},
-		{
-			name: "List entries with prefix",
-			setup: func(s *DiskStore) {
-				_ = s.Set("prefix1", []byte("value1"))
-				_ = s.Set("prefix2", []byte("value2"))
-				_ = s.Set("other", []byte("value3"))
-			},
-			operation: func(s *DiskStore) (any, error) {
-				return s.List("prefix", 0)
-			},
-			validate: func(t *testing.T, result any, err error) {
-				if err != nil {
-					t.Fatalf("Unexpected error: %v", err)
-				}
-
-				entries, ok := result.([]RawEntry)
-				if !ok {
-					t.Fatalf("Expected []RawEntry, got %T", result)
-				}
-
-				if len(entries) != 2 {
-					t.Fatalf("Expected 2 entries, got %d", len(entries))
-				}
-
-				// Verify all entries have the prefix
-				for _, entry := range entries {
-					if !strings.HasPrefix(entry.Key, "prefix") {
-						t.Fatalf("Entry key %s does not have prefix 'prefix'", entry.Key)
-					}
-				}
-			},
-			cleanup: func(s *DiskStore) {
-				_ = s.Close()
-			},
-		},
-		{
-			name: "List entries with limit",
-			setup: func(s *DiskStore) {
-				_ = s.Set("key1", []byte("value1"))
-				_ = s.Set("key2", []byte("value2"))
-				_ = s.Set("key3", []byte("value3"))
-			},
-			operation: func(s *DiskStore) (any, error) {
-				return s.List("", 2)
-			},
-			validate: func(t *testing.T, result any, err error) {
-				if err != nil {
-					t.Fatalf("Unexpected error: %v", err)
-				}
-
-				entries, ok := result.([]RawEntry)
-				if !ok {
-					t.Fatalf("Expected []RawEntry, got %T", result)
-				}
-
-				if len(entries) != 2 {
-					t.Fatalf("Expected 2 entries, got %d", len(entries))
-				}
-			},
-			cleanup: func(s *DiskStore) {
-				_ = s.Close()
-			},
-		},
-		{
-			name: "List entries with prefix and limit",
-			setup: func(s *DiskStore) {
-				_ = s.Set("prefix1", []byte("value1"))
-				_ = s.Set("prefix2", []byte("value2"))
-				_ = s.Set("other", []byte("value3"))
-			},
-			operation: func(s *DiskStore) (any, error) {
-				return s.List("prefix", 1)
-			},
-			validate: func(t *testing.T, result any, err error) {
-				if err != nil {
-					t.Fatalf("Unexpected error: %v", err)
-				}
-
-				entries, ok := result.([]RawEntry)
-				if !ok {
-					t.Fatalf("Expected []RawEntry, got %T", result)
-				}
-
-				if len(entries) != 1 {
-					t.Fatalf("Expected 1 entry, got %d", len(entries))
-				}
-
-				if !strings.HasPrefix(entries[0].Key, "prefix") {
-					t.Fatalf("Entry key %s does not have prefix 'prefix'", entries[0].Key)
-				}
-			},
-			cleanup: func(s *DiskStore) {
-				_ = s.Close()
-			},
-		},
-	}
-
-	// Run test cases
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			// Create a temporary file for testing
-			tempFile := setupTempDiskStore(t)
-			defer os.Remove(tempFile) //nolint:errcheck,forbidigo
-
-			store := NewDiskStore(tempFile)
-			t.Cleanup(func() {
-				_ = store.Close()
-			})
-
-			tc.setup(store)
-			result, err := tc.operation(store)
-			tc.validate(t, result, err)
-			tc.cleanup(store)
-		})
-	}
+func newDiskStoreForTest(t *testing.T) Backend {
+	t.Helper()
+	s := NewDiskStore(filepath.Join(t.TempDir(), "store.db"))
+	t.Cleanup(func() { _ = s.Close() })
+	return s
 }
