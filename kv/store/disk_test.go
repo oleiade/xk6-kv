@@ -81,6 +81,34 @@ func TestDiskStore_PersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+// TestDiskStore_Concurrency stresses bbolt's read/write tx coordination by
+// overlapping reads and writes against a single DiskStore. The test asserts
+// only that the run completes without deadlocking or tripping the race
+// detector (run with -race); bbolt allows concurrent read txs and serializes
+// write txs, so the surface we're exercising is our own usage of that API.
+func TestDiskStore_Concurrency(t *testing.T) {
+	t.Parallel()
+
+	s := newDiskStoreForTest(t)
+	done := make(chan struct{})
+
+	go func() {
+		for range 100 {
+			_ = s.Set("key", []byte("value"))
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		for range 100 {
+			_, _ = s.Get("key")
+		}
+		done <- struct{}{}
+	}()
+
+	<-done
+	<-done
+}
+
 func newDiskStoreForTest(t *testing.T) Backend {
 	t.Helper()
 	s, err := NewDiskStore(filepath.Join(t.TempDir(), "store.db"))
