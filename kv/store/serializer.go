@@ -69,7 +69,7 @@ func (s *StringSerializer) Serialize(value any) ([]byte, error) {
 	}
 
 	// For other values, try to convert to string
-	return []byte(fmt.Sprintf("%v", value)), nil
+	return fmt.Appendf(nil, "%v", value), nil
 }
 
 // Deserialize converts bytes back to a string.

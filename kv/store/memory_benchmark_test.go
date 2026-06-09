@@ -105,7 +105,7 @@ func BenchmarkMemoryStore_List(b *testing.B) {
 	store := NewMemoryStore()
 
 	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
 		err := store.Set(key, value)

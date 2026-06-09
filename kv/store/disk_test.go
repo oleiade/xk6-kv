@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 package store
 
@@ -488,7 +487,7 @@ func setupTempDiskStore(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("Failed to create temporary file: %v", err)
 	}
-	tempFile.Close() //nolint:errcheck,gosec
+	tempFile.Close() //nolint:errcheck
 
 	return tempFile.Name()
 }
