@@ -1,73 +1,8 @@
-# v1.63.4
+# v2.10.1
 # Please don't remove the first line. It uses in CI to determine the golangci version
-run:
-  timeout: 5m
-
-issues:
-  # Maximum issues count per one linter. Set to 0 to disable. Default is 50.
-  max-issues-per-linter: 0
-  # Maximum count of issues with the same text. Set to 0 to disable. Default is 3.
-  max-same-issues: 0
-
-  # We want to try and improve the comments in the k6 codebase, so individual
-  # non-golint items from the default exclusion list will gradually be added
-  # to the exclude-rules below
-  exclude-use-default: false
-
-  exclude-rules:
-   # Exclude duplicate code and function length and complexity checking in test
-   # files (due to common repeats and long functions in test code)
-   - path: _(test|gen)\.go
-     linters:
-       - canonicalheader
-       - cyclop
-       - dupl
-       - gocognit
-       - funlen
-       - lll
-       - forcetypeassert
-   - path: js\/modules\/k6\/browser\/.*\.go
-     linters:
-       - revive
-       - contextcheck
-   - path: js\/modules\/k6\/html\/.*\.go
-     text: "exported: exported "
-     linters:
-       - revive
-   - path: js\/modules\/k6\/http\/.*_test\.go
-     linters:
-       # k6/http module's tests are quite complex because they often have several nested levels.
-       # The module is in maintenance mode, so we don't intend to port the tests to a parallel version.
-       - paralleltest
-       - tparallel
-   - linters:
-     - forbidigo
-     text: 'use of `os\.(SyscallError|Signal|Interrupt)` forbidden'
-
-linters-settings:
-  exhaustive:
-    default-signifies-exhaustive: true
-  cyclop:
-    max-complexity: 25
-  dupl:
-    threshold: 150
-  goconst:
-    min-len: 10
-    min-occurrences: 4
-  funlen:
-    lines: 80
-    statements: 60
-  forbidigo:
-    forbid:
-      - '^(fmt\\.Print(|f|ln)|print|println)$'
-      # Forbid everything in os, except os.Signal and os.SyscalError
-      - '^os\.(.*)$(# Using anything except Signal and SyscallError from the os package is forbidden )?'
-      # Forbid everything in syscall except the uppercase constants
-      - '^syscall\.[^A-Z_]+$(# Using anything except constants from the syscall package is forbidden )?'
-      - '^logrus\.Logger$'
-
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
     - asasalint
     - asciicheck
@@ -94,13 +29,9 @@ linters:
     - gocognit
     - goconst
     - gocritic
-    - gofmt
-    - gofumpt
-    - goimports
     - gomoddirectives
     - goprintffuncname
     - gosec
-    - gosimple
     - govet
     - importas
     - ineffassign
@@ -108,6 +39,7 @@ linters:
     - lll
     - makezero
     - misspell
+    - modernize
     - nakedret
     - nestif
     - nilerr
@@ -119,19 +51,98 @@ linters:
     - prealloc
     - predeclared
     - promlinter
-    - revive
     - reassign
+    - revive
     - rowserrcheck
     - sqlclosecheck
     - staticcheck
-    - stylecheck
-    - usetesting
     - tparallel
-    - typecheck
     - unconvert
     - unparam
     - unused
     - usestdlibvars
+    - usetesting
     - wastedassign
     - whitespace
-  fast: false
+  settings:
+    cyclop:
+      max-complexity: 25
+    dupl:
+      threshold: 150
+    exhaustive:
+      default-signifies-exhaustive: true
+    forbidigo:
+      forbid:
+        - pattern: ^(fmt\\.Print(|f|ln)|print|println)$
+        - pattern: ^os\.(.*)$(# Using anything except Signal and SyscallError from the os package is forbidden )?
+        - pattern: ^syscall\.[^A-Z_]+$(# Using anything except constants from the syscall package is forbidden )?
+        - pattern: ^logrus\.Logger$
+        - pattern: ^afero\.(.*)$(# Using afero outside of the fsext package is forbidden )?
+    funlen:
+      lines: 80
+      statements: 60
+    goconst:
+      min-len: 10
+      min-occurrences: 4
+    usetesting:
+      os-setenv: true
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - canonicalheader
+          - cyclop
+          - dupl
+          - forcetypeassert
+          - funlen
+          - gocognit
+          - lll
+          - gosec
+        path: _(test|gen)\.go
+      - linters:
+          - contextcheck
+          - revive
+        path: js\/modules\/k6\/browser\/.*\.go
+      - linters:
+          - revive
+        path: js\/modules\/k6\/html\/.*\.go
+        text: 'exported: exported '
+      - linters:
+          - paralleltest
+          - tparallel
+        path: js\/modules\/k6\/html\/.*\.go
+      - linters:
+          - paralleltest
+          - tparallel
+        path: js\/modules\/k6\/http\/.*_test\.go
+      - linters:
+          - forbidigo
+        text: use of `os\.(SyscallError|Signal|Interrupt)` forbidden
+      - linters:
+          - forbidigo
+        text: use of `afero\.(.*)` forbidden
+        path: lib/fsext/.*\.go
+      - linters:
+          - revive
+        text: avoid meaningless package names
+      - linters:
+          - revive
+        text: avoid package names that conflict with Go standard library
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

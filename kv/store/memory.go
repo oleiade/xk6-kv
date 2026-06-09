@@ -100,7 +100,7 @@ func (s *MemoryStore) List(prefix string, limit int64) ([]Entry, error) {
 	}
 	sort.Strings(keys)
 
-	var entries []Entry //nolint:prealloc
+	var entries []Entry
 	var count int64
 
 	// Apply limit if set
