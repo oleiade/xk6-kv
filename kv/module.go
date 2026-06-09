@@ -24,12 +24,15 @@ import (
 type (
 	// RootModule is the global module instance that creates KV instances for each VU.
 	RootModule struct {
-		// storeOnce serializes the lazy initialization of the shared store. The
-		// first openKv() call to win the race constructs the backend; later
-		// callers either reuse it or, if their options conflict, get an error.
-		storeOnce sync.Once
+		// mu serializes the lazy initialization of the shared store and
+		// subsequent reads of store/storeOpts. The first openKv() call
+		// to win the lock constructs the backend; later callers either
+		// reuse it or, if their options conflict, get an error. Init
+		// failures are NOT latched — a transient bolt.Open error on the
+		// first call doesn't permanently break the module; the next call
+		// gets a fresh attempt.
+		mu        sync.Mutex
 		store     store.Store
-		storeErr  error
 		storeOpts Options
 	}
 
@@ -115,29 +118,43 @@ func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 		return nil
 	}
 
-	mi.rm.storeOnce.Do(func() {
-		mi.rm.store, mi.rm.storeErr = buildStore(options)
-		if mi.rm.storeErr == nil {
-			mi.rm.storeOpts = options
-		}
-	})
-	if mi.rm.storeErr != nil {
-		common.Throw(mi.vu.Runtime(), mi.rm.storeErr)
+	sharedStore, storeOpts, err := mi.rm.acquireStore(options)
+	if err != nil {
+		common.Throw(mi.vu.Runtime(), err)
 		return nil
 	}
-
-	if mi.rm.storeOpts != options {
+	if storeOpts != options {
 		common.Throw(mi.vu.Runtime(), fmt.Errorf(
 			"kv module already initialized with backend=%q serialization=%q; "+
 				"cannot reopen with backend=%q serialization=%q",
-			mi.rm.storeOpts.Backend, mi.rm.storeOpts.Serialization,
+			storeOpts.Backend, storeOpts.Serialization,
 			options.Backend, options.Serialization,
 		))
 		return nil
 	}
 
-	kv := NewKV(mi.vu, mi.rm.store)
+	kv := NewKV(mi.vu, sharedStore)
 	return mi.vu.Runtime().ToValue(kv).ToObject(mi.vu.Runtime())
+}
+
+// acquireStore returns the shared store, constructing it on the first call.
+// Concurrent callers serialize on rm.mu; the second-and-later callers see
+// the store the winner built. On construction failure the slot is left
+// empty so a subsequent call can retry — a transient bolt.Open error
+// doesn't permanently break the module.
+func (rm *RootModule) acquireStore(options Options) (store.Store, Options, error) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	if rm.store == nil {
+		s, err := buildStore(options)
+		if err != nil {
+			return nil, Options{}, err
+		}
+		rm.store = s
+		rm.storeOpts = options
+	}
+	return rm.store, rm.storeOpts, nil
 }
 
 // buildStore constructs a Store from validated options by composing a backend

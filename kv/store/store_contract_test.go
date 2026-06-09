@@ -53,6 +53,27 @@ func runBackendContract(t *testing.T, factory backendFactory) {
 		}
 	})
 
+	t.Run("Set_empty_value_roundtrips", func(t *testing.T) {
+		t.Parallel()
+		b := factory(t)
+		if err := b.Set("k", []byte{}); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		got, err := b.Get("k")
+		if errors.Is(err, ErrKeyNotFound) {
+			t.Fatal("Get on key with empty value returned ErrKeyNotFound — empty must be distinguishable from missing")
+		}
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got == nil {
+			t.Fatal("Get on key with empty value returned a nil slice; want non-nil empty slice")
+		}
+		if len(got) != 0 {
+			t.Fatalf("Get returned %d bytes, want 0", len(got))
+		}
+	})
+
 	t.Run("Delete_existing", func(t *testing.T) {
 		t.Parallel()
 		b := factory(t)

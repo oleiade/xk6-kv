@@ -1,8 +1,12 @@
 package store
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -10,10 +14,18 @@ import (
 // DiskStore is a Backend that persists key-value pairs in a BoltDB database
 // on disk.
 type DiskStore struct {
-	path   string
-	handle *bolt.DB
-	bucket []byte
+	path      string
+	handle    *bolt.DB
+	bucket    []byte
+	closeOnce sync.Once
+	closeErr  error
 }
+
+// errBucketMissing is returned by view/update if the KV bucket cannot be
+// resolved inside a transaction. NewDiskStore creates the bucket eagerly and
+// nothing in this package removes it, so this is a defensive guard against
+// external corruption or future regressions rather than an expected error.
+var errBucketMissing = errors.New("disk store bucket missing")
 
 // Ensure DiskStore implements the Backend interface.
 var _ Backend = (*DiskStore)(nil)
@@ -34,7 +46,11 @@ func NewDiskStore(path string) (*DiskStore, error) {
 		path = DefaultDiskStorePath
 	}
 
-	handle, err := bolt.Open(path, 0o600, nil)
+	// LockTimeout caps how long bolt.Open will wait for the file lock. The
+	// default (nil options) blocks forever, which would hang OpenKv if a
+	// stale or concurrent process held the lock. 5s is long enough to ride
+	// out a sibling process tearing down and short enough to fail loudly.
+	handle, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("open disk store at %q: %w", path, err)
 	}
@@ -52,33 +68,55 @@ func NewDiskStore(path string) (*DiskStore, error) {
 }
 
 // view runs fn inside a read-only transaction with the KV bucket pre-resolved.
-// The bucket is guaranteed to exist by NewDiskStore and is never torn down,
-// so fn can use it directly.
+// The bucket is created by NewDiskStore and not torn down elsewhere; the nil
+// check guards against external corruption rather than expected absence.
 func (s *DiskStore) view(fn func(*bolt.Bucket) error) error {
-	return s.handle.View(func(tx *bolt.Tx) error { return fn(tx.Bucket(s.bucket)) })
+	return s.handle.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(s.bucket)
+		if b == nil {
+			return errBucketMissing
+		}
+		return fn(b)
+	})
 }
 
 // update runs fn inside a read-write transaction with the KV bucket
 // pre-resolved. See view for the bucket invariant.
 func (s *DiskStore) update(fn func(*bolt.Bucket) error) error {
-	return s.handle.Update(func(tx *bolt.Tx) error { return fn(tx.Bucket(s.bucket)) })
+	return s.handle.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(s.bucket)
+		if b == nil {
+			return errBucketMissing
+		}
+		return fn(b)
+	})
 }
 
 // Get retrieves a value from the disk store.
 func (s *DiskStore) Get(key string) ([]byte, error) {
-	var value []byte
+	var (
+		value []byte
+		found bool
+	)
 	err := s.view(func(b *bolt.Bucket) error {
 		// bbolt's bucket.Get returns a slice valid only for the
-		// transaction's lifetime; copy so callers can hold onto it.
+		// transaction's lifetime; clone so callers can hold onto it.
+		// A stored zero-length value comes back as a non-nil empty
+		// slice, while a missing key comes back as nil — track
+		// presence with a bool to keep that distinction.
 		if v := b.Get([]byte(key)); v != nil {
-			value = append([]byte(nil), v...)
+			value = bytes.Clone(v)
+			if value == nil {
+				value = []byte{}
+			}
+			found = true
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get %q: %w", key, err)
 	}
-	if value == nil {
+	if !found {
 		return nil, fmt.Errorf("disk store: %w: %s", ErrKeyNotFound, key)
 	}
 	return value, nil
@@ -157,7 +195,13 @@ func (s *DiskStore) List(prefix string, limit int64) ([]RawEntry, error) {
 				break
 			}
 			// Copy: value is only valid for the transaction's lifetime.
-			value := append([]byte(nil), v...)
+			// bytes.Clone preserves the nil-vs-empty distinction; force
+			// an empty slice if the source had len 0 so downstream
+			// observers don't confuse "stored empty" with "missing".
+			value := bytes.Clone(v)
+			if value == nil {
+				value = []byte{}
+			}
 			entries = append(entries, RawEntry{Key: key, Value: value})
 			count++
 		}
@@ -173,6 +217,11 @@ func (s *DiskStore) List(prefix string, limit int64) ([]RawEntry, error) {
 // The store is shared across all VUs in a k6 run; Close is intended to be
 // called at most once per process (typically at script teardown). After
 // Close, any subsequent Get/Set/etc. against this DiskStore will fail.
+// Repeat calls are idempotent and return the same error (if any) as the
+// first call.
 func (s *DiskStore) Close() error {
-	return s.handle.Close()
+	s.closeOnce.Do(func() {
+		s.closeErr = s.handle.Close()
+	})
+	return s.closeErr
 }
