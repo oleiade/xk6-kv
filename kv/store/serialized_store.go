@@ -2,116 +2,84 @@ package store
 
 import "fmt"
 
-// SerializedStore wraps a Store and adds serialization capabilities.
+// SerializedStore is the canonical Store implementation: it wraps a Backend
+// and a Serializer, exposing JS-friendly `any`-typed values on top of the
+// backend's raw bytes.
 type SerializedStore struct {
-	// The underlying store implementation
-	store Store
-
-	// The serializer to use
+	backend    Backend
 	serializer Serializer
 }
 
-// NewSerializedStore creates a new SerializedStore with the given store and serializer.
-func NewSerializedStore(store Store, serializer Serializer) *SerializedStore {
+// Ensure SerializedStore implements the Store interface.
+var _ Store = (*SerializedStore)(nil)
+
+// NewSerializedStore creates a new SerializedStore with the given backend
+// and serializer.
+func NewSerializedStore(backend Backend, serializer Serializer) *SerializedStore {
 	return &SerializedStore{
-		store:      store,
+		backend:    backend,
 		serializer: serializer,
 	}
 }
 
-// Get retrieves a value from the store and deserializes it.
+// Get retrieves and deserializes the value for a key.
 func (s *SerializedStore) Get(key string) (any, error) {
-	// Get the raw value from the store
-	rawValue, err := s.store.Get(key)
+	raw, err := s.backend.Get(key)
 	if err != nil {
 		return nil, err
 	}
-
-	// Handle string values from stores that don't use byte slices
-	if strValue, ok := rawValue.(string); ok {
-		return s.serializer.Deserialize([]byte(strValue))
-	}
-
-	// Handle byte slice values
-	if byteValue, ok := rawValue.([]byte); ok {
-		return s.serializer.Deserialize(byteValue)
-	}
-
-	// If the value is already deserialized (e.g., from memory store)
-	return rawValue, nil
+	return s.serializer.Deserialize(raw)
 }
 
 // Set serializes a value and stores it.
 func (s *SerializedStore) Set(key string, value any) error {
-	// Serialize the value
-	serializedValue, err := s.serializer.Serialize(value)
+	raw, err := s.serializer.Serialize(value)
 	if err != nil {
 		return fmt.Errorf("failed to serialize value: %w", err)
 	}
-
-	// Store the serialized value
-	return s.store.Set(key, serializedValue)
+	return s.backend.Set(key, raw)
 }
 
 // Delete removes a key from the store.
 func (s *SerializedStore) Delete(key string) error {
-	return s.store.Delete(key)
+	return s.backend.Delete(key)
 }
 
 // Exists checks if a key exists in the store.
 func (s *SerializedStore) Exists(key string) (bool, error) {
-	return s.store.Exists(key)
+	return s.backend.Exists(key)
 }
 
 // Clear removes all keys from the store.
 func (s *SerializedStore) Clear() error {
-	return s.store.Clear()
+	return s.backend.Clear()
 }
 
 // Size returns the number of keys in the store.
 func (s *SerializedStore) Size() (int64, error) {
-	return s.store.Size()
+	return s.backend.Size()
 }
 
-// List returns all key-value pairs in the store, optionally filtered by prefix and limited to a maximum count.
+// List returns deserialized key-value pairs, optionally filtered by prefix
+// and capped at limit (when > 0).
 func (s *SerializedStore) List(prefix string, limit int64) ([]Entry, error) {
-	// Get the raw entries from the underlying store
-	rawEntries, err := s.store.List(prefix, limit)
+	raw, err := s.backend.List(prefix, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	// Deserialize each entry's value
-	entries := make([]Entry, len(rawEntries))
-	for i, entry := range rawEntries {
-		// Handle string values from stores that don't use byte slices
-		if strValue, ok := entry.Value.(string); ok {
-			deserializedValue, err := s.serializer.Deserialize([]byte(strValue))
-			if err != nil {
-				return nil, fmt.Errorf("failed to deserialize value for key %s: %w", entry.Key, err)
-			}
-			entries[i] = Entry{Key: entry.Key, Value: deserializedValue}
-			continue
+	entries := make([]Entry, len(raw))
+	for i, e := range raw {
+		value, derr := s.serializer.Deserialize(e.Value)
+		if derr != nil {
+			return nil, fmt.Errorf("failed to deserialize value for key %s: %w", e.Key, derr)
 		}
-
-		// Handle byte slice values
-		if byteValue, ok := entry.Value.([]byte); ok {
-			deserializedValue, err := s.serializer.Deserialize(byteValue)
-			if err != nil {
-				return nil, fmt.Errorf("failed to deserialize value for key %s: %w", entry.Key, err)
-			}
-			entries[i] = Entry{Key: entry.Key, Value: deserializedValue}
-			continue
-		}
-
-		// If the value is already deserialized (e.g., from memory store)
-		entries[i] = entry
+		entries[i] = Entry{Key: e.Key, Value: value}
 	}
-
 	return entries, nil
 }
 
-// Close closes the underlying store.
+// Close closes the underlying backend.
 func (s *SerializedStore) Close() error {
-	return s.store.Close()
+	return s.backend.Close()
 }

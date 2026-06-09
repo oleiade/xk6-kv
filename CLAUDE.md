@@ -52,13 +52,13 @@ The extension is registered once at process start by `register.go`, which calls 
 
 5. **Backends — `kv/store/memory.go` and `kv/store/disk.go`.**
    - `MemoryStore`: `map[string][]byte` behind a `sync.RWMutex`. `Close` is a no-op.
-   - `DiskStore`: BoltDB at `.k6.kv` (constant `DefaultDiskStorePath`), single bucket `"k6"` (note: `bucket` is actually set to `DefaultDiskStorePath`, not `DefaultKvBucket` — see `disk.go:64`). Uses an `atomic.Bool` opened-flag, an `atomic.Int64` refcount, and a `sync.Mutex` to make `open()` idempotent and `Close()` reference-counted. The DB is opened lazily on the first operation, not at construction.
+   - `DiskStore`: BoltDB at `.k6.kv` (constant `DefaultDiskStorePath`), single bucket `"k6"` (constant `DefaultKvBucket`). `NewDiskStore(path)` eagerly opens the file and creates the bucket, returning `(*DiskStore, error)`. `Close()` closes the underlying handle and releases the file lock.
 
 6. **`kv/store/serializer.go`.** Two implementations: `JSONSerializer` (default) round-trips through `encoding/json`; `StringSerializer` does raw string passthrough. Pick via the `serialization: "json" | "string"` option on `openKv()`.
 
-**Adding a new backend:** implement `store.Store`, wire it into the `switch options.Backend` block in `kv/module.go:OpenKv`, and add it to the validation list in `NewOptionsFrom`. The `SerializedStore` decorator handles serialization for you.
+**Adding a new backend:** implement `store.Backend` (raw `[]byte` contract) and add one entry to the `backendFactories` map in `kv/module.go`. The same map drives both option validation in `NewOptionsFrom` and store construction in `buildStore`, so the two paths can't drift apart. The `SerializedStore` decorator handles serialization for you.
 
-**Error model.** `kv/errors.go` defines a small set of named errors (`DatabaseNotOpenError`, `KeyNotFoundError`, …) wrapped in a custom `Error` type that surfaces `{name, message}` to JS. Backend-level errors from BoltDB are wrapped with `fmt.Errorf("...: %w", err)` rather than being mapped to these names — only the JS-facing layer in `kv/kv.go` uses `NewError`.
+**Error model.** `kv/errors.go` defines `ErrorName` constants (currently `KeyNotFoundErr`) wrapped in a custom `Error` type that surfaces `{name, message}` to JS. The Go identifier uses the idiomatic `Err` suffix; the string value (e.g. `"KeyNotFoundError"`) is the JS-facing name and is kept stable. Backend errors that match `store.ErrKeyNotFound` are translated at the JS boundary in `kv/kv.go`; other backend errors are wrapped with `fmt.Errorf("...: %w", err)` and surfaced as-is.
 
 ## Conventions
 

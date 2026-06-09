@@ -1,36 +1,21 @@
 package kv
 
-// ErrorName represents the name of an error
+// ErrorName identifies a class of error surfaced to JS as the `name` field
+// of an Error instance. Each named error is mapped from a Go-side condition
+// at the JS boundary in kv.go.
 type ErrorName string
 
 const (
-	// DatabaseNotOpenError is emitted when the database is accessed before it is opened
-	// or after it is closed.
-	DatabaseNotOpenError ErrorName = "DatabaseNotOpenError"
-
-	// DatabaseAlreadyOpenError is emitted when the database is opened more than once.
-	DatabaseAlreadyOpenError = "DatabaseAlreadyOpenError"
-
-	// BucketNotFoundError is emitted when the bucket is not found in the database.
-	BucketNotFoundError = "BucketNotFoundError"
-
-	// BucketExistsError is emitted when the bucket already exists in the database.
-	BucketExistsError = "BucketExistsError"
-
-	// KeyNotFoundError is emitted when the key is not found in the bucket.
-	KeyNotFoundError = "KeyNotFoundError"
-
-	// KeyRequiredError is emitted when inserting an empty key.
-	KeyRequiredError = "KeyRequiredError"
-
-	// KeyTooLargeError is emitted when the key is too large.
-	KeyTooLargeError = "KeyTooLargeError"
-
-	// ValueTooLargeError is emitted when the value is too large.
-	ValueTooLargeError = "ValueTooLargeError"
+	// keyNotFoundErr is emitted when a lookup is performed for a key that
+	// does not exist in the store. The string value is the name surfaced to
+	// JS, kept stable for script-side `err.name === "KeyNotFoundError"`
+	// checks.
+	keyNotFoundErr ErrorName = "KeyNotFoundError"
 )
 
-// Error represents a custom error emitted by the kv module
+// Error represents a custom error emitted by the kv module to JS scripts.
+// Only fields are exported (so encoding/json can see them); construction is
+// package-private via newError.
 type Error struct {
 	// Name contains one of the strings associated with an error name.
 	Name ErrorName `json:"name"`
@@ -39,8 +24,7 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// NewError returns a new Error instance.
-func NewError(name ErrorName, message string) *Error {
+func newError(name ErrorName, message string) *Error {
 	return &Error{
 		Name:    name,
 		Message: message,

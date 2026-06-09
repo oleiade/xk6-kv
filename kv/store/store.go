@@ -1,34 +1,55 @@
 // Package store provides a key-value store interface and implementations.
+//
+// The package exposes two interfaces:
+//
+//   - Backend is the low-level, []byte-typed contract that storage
+//     implementations (in-memory, BoltDB, ...) satisfy. It carries no
+//     serialization concern; values are uninterpreted byte slices.
+//
+//   - Store is the JS-facing contract that delivers deserialized values
+//     (any). SerializedStore is its canonical implementation, decorating a
+//     Backend with a Serializer.
+//
+// The split lets the rest of the codebase enforce at compile time that
+// backends only ever produce []byte, while the JS layer continues to see
+// JSON-decoded values.
 package store
 
-// Store interface defines the operations for a key-value store.
-type Store interface {
-	// Get returns the value of a key in the store.
-	Get(key string) (any, error)
-
-	// Set sets the value of a key in the store.
-	Set(key string, value any) error
-
-	// Delete deletes a key from the store.
+// Backend is the raw []byte-typed key-value contract that storage
+// implementations satisfy.
+type Backend interface {
+	Get(key string) ([]byte, error)
+	Set(key string, value []byte) error
 	Delete(key string) error
-
-	// Exists checks if a given key exists.
 	Exists(key string) (bool, error)
-
-	// Clear clears the store.
 	Clear() error
-
-	// Size returns the number of keys in the store.
 	Size() (int64, error)
-
-	// List returns all key-value pairs in the store, optionally filtered by prefix and limited to a maximum count.
-	List(prefix string, limit int64) ([]Entry, error)
-
-	// Close closes the store.
+	List(prefix string, limit int64) ([]RawEntry, error)
 	Close() error
 }
 
-// Entry represents a key-value pair in the store.
+// RawEntry is a key/value pair returned by Backend.List, with the value as
+// raw bytes.
+type RawEntry struct {
+	Key   string
+	Value []byte
+}
+
+// Store is the JS-facing key-value contract: values cross the boundary as
+// arbitrary deserialized Go values.
+type Store interface {
+	Get(key string) (any, error)
+	Set(key string, value any) error
+	Delete(key string) error
+	Exists(key string) (bool, error)
+	Clear() error
+	Size() (int64, error)
+	List(prefix string, limit int64) ([]Entry, error)
+	Close() error
+}
+
+// Entry is a key/value pair returned by Store.List, with the value already
+// deserialized.
 type Entry struct {
 	Key   string
 	Value any

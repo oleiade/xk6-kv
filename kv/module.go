@@ -9,6 +9,10 @@ package kv
 
 import (
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"sync"
 
 	"github.com/grafana/sobek"
 	"go.k6.io/k6/v2/js/common"
@@ -18,10 +22,18 @@ import (
 )
 
 type (
-	// RootModule is the global module instance that will create Client
-	// instances for each VU.
+	// RootModule is the global module instance that creates KV instances for each VU.
 	RootModule struct {
-		store store.Store
+		// mu serializes the lazy initialization of the shared store and
+		// subsequent reads of store/storeOpts. The first openKv() call
+		// to win the lock constructs the backend; later callers either
+		// reuse it or, if their options conflict, get an error. Init
+		// failures are NOT latched — a transient bolt.Open error on the
+		// first call doesn't permanently break the module; the next call
+		// gets a fresh attempt.
+		mu        sync.Mutex
+		store     store.Store
+		storeOpts Options
 	}
 
 	// ModuleInstance represents an instance of the JS module.
@@ -36,6 +48,37 @@ var (
 	_ modules.Instance = &ModuleInstance{}
 	_ modules.Module   = &RootModule{}
 )
+
+// backendFactories registers the available raw storage backends. Adding a new
+// backend is a single map entry; OpenKv's validation and construction both
+// read from this map so the two paths cannot drift apart. The uniform
+// `(Backend, error)` signature lets backends that may fail at construction
+// (e.g. disk, which acquires a BoltDB file lock) share the call site with
+// infallible ones (e.g. memory).
+//
+//nolint:gochecknoglobals
+var backendFactories = map[string]func() (store.Backend, error){
+	"memory": newMemoryBackend,
+	"disk":   newDiskBackend,
+}
+
+// newMemoryBackend always returns a nil error; the signature matches the
+// fallible backends so they can all share the factory map.
+//
+//nolint:unparam
+func newMemoryBackend() (store.Backend, error) { return store.NewMemoryStore(), nil }
+
+func newDiskBackend() (store.Backend, error) {
+	return store.NewDiskStore(store.DefaultDiskStorePath)
+}
+
+// serializerFactories registers the available serializers. See backendFactories.
+//
+//nolint:gochecknoglobals
+var serializerFactories = map[string]func() store.Serializer{
+	"json":   func() store.Serializer { return store.NewJSONSerializer() },
+	"string": func() store.Serializer { return store.NewStringSerializer() },
+}
 
 // New returns a pointer to a new RootModule instance.
 //
@@ -63,6 +106,11 @@ func (mi *ModuleInstance) Exports() modules.Exports {
 }
 
 // OpenKv opens the KV store and returns a KV instance.
+//
+// The shared store is constructed once per process on the first call. Later
+// calls reuse that store. If a later call requests options that conflict with
+// the options the store was first opened with, it errors out — VUs cannot
+// safely "reopen" the store with a different backend or serializer.
 func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 	options, err := NewOptionsFrom(mi.vu, opts)
 	if err != nil {
@@ -70,33 +118,61 @@ func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 		return nil
 	}
 
-	if mi.rm.store == nil {
-		// Create the base store based on the backend option
-		var baseStore store.Store
-		switch options.Backend {
-		case "memory":
-			baseStore = store.NewMemoryStore()
-		case "disk":
-			baseStore = store.NewDiskStore()
-		}
-
-		// Create the serializer based on the serialization option
-		var serializer store.Serializer
-		switch options.Serialization {
-		case "json":
-			serializer = store.NewJSONSerializer()
-		case "string":
-			serializer = store.NewStringSerializer()
-		default:
-			serializer = store.NewJSONSerializer() // Default to JSON
-		}
-
-		// Create a serialized store with the chosen store and serializer
-		mi.rm.store = store.NewSerializedStore(baseStore, serializer)
+	sharedStore, storeOpts, err := mi.rm.acquireStore(options)
+	if err != nil {
+		common.Throw(mi.vu.Runtime(), err)
+		return nil
+	}
+	if storeOpts != options {
+		common.Throw(mi.vu.Runtime(), fmt.Errorf(
+			"kv module already initialized with backend=%q serialization=%q; "+
+				"cannot reopen with backend=%q serialization=%q",
+			storeOpts.Backend, storeOpts.Serialization,
+			options.Backend, options.Serialization,
+		))
+		return nil
 	}
 
-	kv := NewKV(mi.vu, mi.rm.store)
+	kv := NewKV(mi.vu, sharedStore)
 	return mi.vu.Runtime().ToValue(kv).ToObject(mi.vu.Runtime())
+}
+
+// acquireStore returns the shared store, constructing it on the first call.
+// Concurrent callers serialize on rm.mu; the second-and-later callers see
+// the store the winner built. On construction failure the slot is left
+// empty so a subsequent call can retry — a transient bolt.Open error
+// doesn't permanently break the module.
+func (rm *RootModule) acquireStore(options Options) (store.Store, Options, error) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	if rm.store == nil {
+		s, err := buildStore(options)
+		if err != nil {
+			return nil, Options{}, err
+		}
+		rm.store = s
+		rm.storeOpts = options
+	}
+	return rm.store, rm.storeOpts, nil
+}
+
+// buildStore constructs a Store from validated options by composing a backend
+// and a serializer via the SerializedStore decorator.
+func buildStore(options Options) (store.Store, error) {
+	backendFactory, ok := backendFactories[options.Backend]
+	if !ok {
+		return nil, fmt.Errorf("unknown backend: %q", options.Backend)
+	}
+	serializerFactory, ok := serializerFactories[options.Serialization]
+	if !ok {
+		return nil, fmt.Errorf("unknown serialization: %q", options.Serialization)
+	}
+	backend, err := backendFactory()
+	if err != nil {
+		return nil, fmt.Errorf("build %s backend: %w", options.Backend, err)
+	}
+	return store.NewSerializedStore(backend, serializerFactory()), nil
 }
 
 // Options represents the options for a KV instance.
@@ -112,9 +188,10 @@ type Options struct {
 	Serialization string `json:"serialization"`
 }
 
-// NewOptionsFrom creates a new KVOptions instance from a sobek.Value.
+// NewOptionsFrom creates a new Options instance from a sobek.Value, applying
+// defaults and validating the backend/serialization against the registered
+// factories.
 func NewOptionsFrom(vu modules.VU, options sobek.Value) (Options, error) {
-	// Default
 	opts := Options{
 		Backend:       DefaultBackend,
 		Serialization: DefaultSerialization,
@@ -125,21 +202,25 @@ func NewOptionsFrom(vu modules.VU, options sobek.Value) (Options, error) {
 	}
 
 	if err := vu.Runtime().ExportTo(options, &opts); err != nil {
-		return opts, fmt.Errorf("unable to parse options; reason: %w", err)
+		return Options{}, fmt.Errorf("unable to parse options; reason: %w", err)
 	}
 
-	if opts.Backend != "memory" && opts.Backend != "disk" {
-		return opts, fmt.Errorf("invalid backend: %s, valid values are: %s, %s", opts.Backend, DefaultBackend, "disk")
+	if _, ok := backendFactories[opts.Backend]; !ok {
+		return Options{}, fmt.Errorf(
+			"invalid backend: %q (valid: %s)", opts.Backend, sortedKeys(backendFactories))
 	}
-
-	if opts.Serialization != "json" && opts.Serialization != "string" {
-		return opts, fmt.Errorf(
-			"invalid serialization: %s, valid values are: %s, %s",
-			opts.Serialization, DefaultSerialization, "string",
-		)
+	if _, ok := serializerFactories[opts.Serialization]; !ok {
+		return Options{}, fmt.Errorf(
+			"invalid serialization: %q (valid: %s)", opts.Serialization, sortedKeys(serializerFactories))
 	}
 
 	return opts, nil
+}
+
+// sortedKeys returns the comma-separated sorted keys of a map for stable
+// error messages.
+func sortedKeys[V any](m map[string]V) string {
+	return strings.Join(slices.Sorted(maps.Keys(m)), ", ")
 }
 
 const (
