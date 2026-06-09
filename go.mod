@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/grafana/sobek v0.0.0-20260429085637-a66d4790012b
-	go.etcd.io/bbolt v1.4.0
+	go.etcd.io/bbolt v1.4.3
 	go.k6.io/k6/v2 v2.0.0
 )
 
