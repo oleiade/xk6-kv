@@ -61,7 +61,7 @@ func (s *DiskStore) open() error {
 	}
 
 	err = handler.Update(func(tx *bolt.Tx) error {
-		_, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultDiskStorePath))
+		_, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
 		if bucketErr != nil {
 			return fmt.Errorf("failed to create internal bucket: %w", bucketErr)
 		}
@@ -73,7 +73,7 @@ func (s *DiskStore) open() error {
 	}
 
 	s.handle = handler
-	s.bucket = []byte(DefaultDiskStorePath)
+	s.bucket = []byte(DefaultKvBucket)
 	s.opened.Store(true)
 	s.refCount.Add(1)
 

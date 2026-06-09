@@ -1,10 +1,10 @@
-// Package kv provides a key-value database that can be used to store and retrieve data.
+// Package kv provides a key-value store JS module that can be used to share state across
+// k6 Virtual Users during a test run.
 //
-// The key-value database is backed by BoltDB, and is shared between all VUs. It is persisted
-// to disk, so data stored in the database will be available across test runs.
-//
-// The database is opened when the first KV instance is created, and closed when the last KV
-// instance is closed.
+// The store is shared between all VUs and constructed once on the first call to openKv().
+// Two backends are available: an in-memory backend (ephemeral, fastest) and a disk backend
+// (BoltDB-backed, persistent across test runs). The backend and serialization format are
+// selected via the options passed to openKv().
 package kv
 
 import (
@@ -21,7 +21,6 @@ type (
 	// RootModule is the global module instance that will create Client
 	// instances for each VU.
 	RootModule struct {
-		// db *db
 		store store.Store
 	}
 
@@ -29,8 +28,6 @@ type (
 	ModuleInstance struct {
 		vu modules.VU
 		rm *RootModule
-
-		kv *KV
 	}
 )
 
@@ -40,19 +37,12 @@ var (
 	_ modules.Module   = &RootModule{}
 )
 
-// New returns a pointer to a new RootModule instance
+// New returns a pointer to a new RootModule instance.
+//
+// The shared store is left nil and is constructed on the first call to openKv()
+// from JS, so its backend and serialization can be chosen at script time.
 func New() *RootModule {
-	// // Create a memory store with JSON serialization by default
-	// memoryStore := store.NewMemoryStore()
-	// jsonSerializer := store.NewJSONSerializer()
-	// serializedStore := store.NewSerializedStore(memoryStore, jsonSerializer)
-
-	// return &RootModule{store: serializedStore}
-	return &RootModule{
-		// As default, the store is nil, we expect the user to call openKv()
-		// which should set the store shared between all VUs.
-		store: nil,
-	}
+	return &RootModule{}
 }
 
 // NewModuleInstance implements the modules.Module interface and returns
@@ -70,12 +60,6 @@ func (mi *ModuleInstance) Exports() modules.Exports {
 	return modules.Exports{Named: map[string]any{
 		"openKv": mi.OpenKv,
 	}}
-}
-
-// NewKV implements the modules.Instance interface and returns
-// a new KV instance.
-func (mi *ModuleInstance) NewKV(_ sobek.ConstructorCall) *sobek.Object {
-	return mi.vu.Runtime().ToValue(mi.kv).ToObject(mi.vu.Runtime())
 }
 
 // OpenKv opens the KV store and returns a KV instance.
@@ -108,14 +92,11 @@ func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 		}
 
 		// Create a serialized store with the chosen store and serializer
-		serializedStore := store.NewSerializedStore(baseStore, serializer)
-		mi.rm.store = serializedStore
+		mi.rm.store = store.NewSerializedStore(baseStore, serializer)
 	}
 
 	kv := NewKV(mi.vu, mi.rm.store)
-	mi.kv = kv
-
-	return mi.vu.Runtime().ToValue(mi.kv).ToObject(mi.vu.Runtime())
+	return mi.vu.Runtime().ToValue(kv).ToObject(mi.vu.Runtime())
 }
 
 // Options represents the options for a KV instance.

@@ -115,13 +115,3 @@ func (s *SerializedStore) List(prefix string, limit int64) ([]Entry, error) {
 func (s *SerializedStore) Close() error {
 	return s.store.Close()
 }
-
-// GetSerializer returns the serializer used by this store.
-func (s *SerializedStore) GetSerializer() Serializer {
-	return s.serializer
-}
-
-// SetSerializer changes the serializer used by this store.
-func (s *SerializedStore) SetSerializer(serializer Serializer) {
-	s.serializer = serializer
-}
