@@ -118,7 +118,11 @@ func (k *KV) Size() *sobek.Promise {
 	})
 }
 
-// Close closes the KV instance.
+// Close closes the underlying store.
+//
+// The store is shared across every VU in the run, so Close is a
+// process-wide teardown — intended to be called at most once. After Close,
+// any further Get/Set/etc. on any KV instance will fail.
 func (k *KV) Close() error {
 	return k.store.Close()
 }

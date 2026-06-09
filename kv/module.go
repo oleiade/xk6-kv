@@ -9,7 +9,8 @@ package kv
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -202,12 +203,7 @@ func NewOptionsFrom(vu modules.VU, options sobek.Value) (Options, error) {
 // sortedKeys returns the comma-separated sorted keys of a map for stable
 // error messages.
 func sortedKeys[V any](m map[string]V) string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, ", ")
+	return strings.Join(slices.Sorted(maps.Keys(m)), ", ")
 }
 
 const (
