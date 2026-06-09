@@ -51,26 +51,33 @@ func NewDiskStore(path string) (*DiskStore, error) {
 	return &DiskStore{path: path, handle: handle, bucket: bucket}, nil
 }
 
+// view runs fn inside a read-only transaction with the KV bucket pre-resolved.
+// The bucket is guaranteed to exist by NewDiskStore and is never torn down,
+// so fn can use it directly.
+func (s *DiskStore) view(fn func(*bolt.Bucket) error) error {
+	return s.handle.View(func(tx *bolt.Tx) error { return fn(tx.Bucket(s.bucket)) })
+}
+
+// update runs fn inside a read-write transaction with the KV bucket
+// pre-resolved. See view for the bucket invariant.
+func (s *DiskStore) update(fn func(*bolt.Bucket) error) error {
+	return s.handle.Update(func(tx *bolt.Tx) error { return fn(tx.Bucket(s.bucket)) })
+}
+
 // Get retrieves a value from the disk store.
 func (s *DiskStore) Get(key string) ([]byte, error) {
 	var value []byte
-	err := s.handle.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
-		if bucket == nil {
-			return fmt.Errorf("bucket %s not found", s.bucket)
-		}
-		// bbolt's bucket.Get returns a slice that is only valid for the
-		// duration of the transaction; copy so callers can hold onto it.
-		v := bucket.Get([]byte(key))
-		if v != nil {
+	err := s.view(func(b *bolt.Bucket) error {
+		// bbolt's bucket.Get returns a slice valid only for the
+		// transaction's lifetime; copy so callers can hold onto it.
+		if v := b.Get([]byte(key)); v != nil {
 			value = append([]byte(nil), v...)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("unable to get value from disk store: %w", err)
+		return nil, fmt.Errorf("get %q: %w", key, err)
 	}
-
 	if value == nil {
 		return nil, fmt.Errorf("disk store: %w: %s", ErrKeyNotFound, key)
 	}
@@ -79,64 +86,42 @@ func (s *DiskStore) Get(key string) ([]byte, error) {
 
 // Set sets a value in the disk store.
 func (s *DiskStore) Set(key string, value []byte) error {
-	err := s.handle.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
-		if bucket == nil {
-			return fmt.Errorf("bucket not found")
-		}
-		return bucket.Put([]byte(key), value)
-	})
-	if err != nil {
-		return fmt.Errorf("unable to insert value into disk store: %w", err)
+	if err := s.update(func(b *bolt.Bucket) error {
+		return b.Put([]byte(key), value)
+	}); err != nil {
+		return fmt.Errorf("set %q: %w", key, err)
 	}
 	return nil
 }
 
 // Delete removes a value from the disk store.
 func (s *DiskStore) Delete(key string) error {
-	err := s.handle.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
-		if bucket == nil {
-			return fmt.Errorf("bucket %s not found", s.bucket)
-		}
-		return bucket.Delete([]byte(key))
-	})
-	if err != nil {
-		return fmt.Errorf("unable to delete value from disk store: %w", err)
+	if err := s.update(func(b *bolt.Bucket) error {
+		return b.Delete([]byte(key))
+	}); err != nil {
+		return fmt.Errorf("delete %q: %w", key, err)
 	}
 	return nil
 }
 
 // Exists checks if a given key exists.
 func (s *DiskStore) Exists(key string) (bool, error) {
-	exists := false
-	err := s.handle.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
-		if bucket == nil {
-			return fmt.Errorf("bucket %s not found", s.bucket)
-		}
-		exists = bucket.Get([]byte(key)) != nil
+	var exists bool
+	if err := s.view(func(b *bolt.Bucket) error {
+		exists = b.Get([]byte(key)) != nil
 		return nil
-	})
-	if err != nil {
-		return exists, fmt.Errorf("unable to check if key exists in disk store: %w", err)
+	}); err != nil {
+		return false, fmt.Errorf("exists %q: %w", key, err)
 	}
 	return exists, nil
 }
 
 // Clear removes all keys from the store.
 func (s *DiskStore) Clear() error {
-	err := s.handle.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
-		if bucket == nil {
-			return fmt.Errorf("bucket %s not found", s.bucket)
-		}
-		return bucket.ForEach(func(k, _ []byte) error {
-			return bucket.Delete(k)
-		})
-	})
-	if err != nil {
-		return fmt.Errorf("unable to clear disk store: %w", err)
+	if err := s.update(func(b *bolt.Bucket) error {
+		return b.ForEach(func(k, _ []byte) error { return b.Delete(k) })
+	}); err != nil {
+		return fmt.Errorf("clear disk store: %w", err)
 	}
 	return nil
 }
@@ -144,16 +129,11 @@ func (s *DiskStore) Clear() error {
 // Size returns the size of the store.
 func (s *DiskStore) Size() (int64, error) {
 	var size int64
-	err := s.handle.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
-		if bucket == nil {
-			return fmt.Errorf("bucket %s not found", s.bucket)
-		}
-		size = int64(bucket.Stats().KeyN)
+	if err := s.view(func(b *bolt.Bucket) error {
+		size = int64(b.Stats().KeyN)
 		return nil
-	})
-	if err != nil {
-		return 0, fmt.Errorf("unable to get size of disk store: %w", err)
+	}); err != nil {
+		return 0, fmt.Errorf("size of disk store: %w", err)
 	}
 	return size, nil
 }
@@ -163,16 +143,11 @@ func (s *DiskStore) Size() (int64, error) {
 // (when > 0).
 func (s *DiskStore) List(prefix string, limit int64) ([]RawEntry, error) {
 	var entries []RawEntry
-	err := s.handle.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(s.bucket)
-		if bucket == nil {
-			return fmt.Errorf("bucket %s not found", s.bucket)
-		}
-
+	if err := s.view(func(b *bolt.Bucket) error {
 		var count int64
 		hasLimit := limit > 0
 
-		c := bucket.Cursor()
+		c := b.Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			key := string(k)
 			if prefix != "" && !strings.HasPrefix(key, prefix) {
@@ -181,20 +156,23 @@ func (s *DiskStore) List(prefix string, limit int64) ([]RawEntry, error) {
 			if hasLimit && count >= limit {
 				break
 			}
-			// Copy the value: it's only valid for the transaction's lifetime.
+			// Copy: value is only valid for the transaction's lifetime.
 			value := append([]byte(nil), v...)
 			entries = append(entries, RawEntry{Key: key, Value: value})
 			count++
 		}
 		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("unable to list entries from disk store: %w", err)
+	}); err != nil {
+		return nil, fmt.Errorf("list disk store: %w", err)
 	}
 	return entries, nil
 }
 
 // Close closes the underlying BoltDB file and releases its file lock.
+//
+// The store is shared across all VUs in a k6 run; Close is intended to be
+// called at most once per process (typically at script teardown). After
+// Close, any subsequent Get/Set/etc. against this DiskStore will fail.
 func (s *DiskStore) Close() error {
 	return s.handle.Close()
 }
