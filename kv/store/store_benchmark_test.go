@@ -62,7 +62,7 @@ func runBackendBenchmarks(b *testing.B, factory backendBenchFactory) {
 	b.Run("List", func(b *testing.B) {
 		backend := factory(b)
 		seed(b, backend, 1000)
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			_ = backend.Set(fmt.Sprintf("prefix-%d", i), []byte(valueAt(i)))
 		}
 
@@ -107,7 +107,7 @@ func runBackendBenchmarks(b *testing.B, factory backendBenchFactory) {
 
 func seed(b *testing.B, backend Backend, n int) {
 	b.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if err := backend.Set(keyAt(i), []byte(valueAt(i))); err != nil {
 			b.Fatalf("seed: %v", err)
 		}
