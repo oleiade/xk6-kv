@@ -45,7 +45,7 @@ func (k *KV) async(fn func() (any, error)) *sobek.Promise {
 		value, err := fn()
 		if err != nil {
 			if errors.Is(err, store.ErrKeyNotFound) {
-				reject(NewError(KeyNotFoundError, err.Error()))
+				reject(newError(keyNotFoundErr, err.Error()))
 				return
 			}
 			reject(err)

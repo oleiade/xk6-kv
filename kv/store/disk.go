@@ -3,8 +3,6 @@ package store
 import (
 	"fmt"
 	"strings"
-	"sync"
-	"sync/atomic"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -12,12 +10,9 @@ import (
 // DiskStore is a Backend that persists key-value pairs in a BoltDB database
 // on disk.
 type DiskStore struct {
-	path     string
-	handle   *bolt.DB
-	bucket   []byte
-	opened   atomic.Bool
-	refCount atomic.Int64
-	lock     sync.Mutex
+	path   string
+	handle *bolt.DB
+	bucket []byte
 }
 
 // Ensure DiskStore implements the Backend interface.
@@ -31,66 +26,33 @@ const (
 	DefaultKvBucket = "k6"
 )
 
-// NewDiskStore creates a new DiskStore that will open its BoltDB database at
-// the given path on the first operation. An empty path falls back to
+// NewDiskStore opens (or creates) a BoltDB database at the given path and
+// returns a ready-to-use DiskStore. An empty path falls back to
 // DefaultDiskStorePath.
-func NewDiskStore(path string) *DiskStore {
+func NewDiskStore(path string) (*DiskStore, error) {
 	if path == "" {
 		path = DefaultDiskStorePath
 	}
-	return &DiskStore{
-		path:   path,
-		handle: new(bolt.DB),
-	}
-}
 
-// open opens the database if it is not already open.
-//
-// It is safe to call this method multiple times.
-// The database will only be opened once.
-func (s *DiskStore) open() error {
-	if s.opened.Load() {
-		s.refCount.Add(1)
-		return nil
-	}
-
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.opened.Load() {
-		return nil
-	}
-
-	handler, err := bolt.Open(s.path, 0o600, nil)
+	handle, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("open disk store at %q: %w", path, err)
 	}
 
-	err = handler.Update(func(tx *bolt.Tx) error {
-		_, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
-		if bucketErr != nil {
-			return fmt.Errorf("failed to create internal bucket: %w", bucketErr)
-		}
-		return nil
-	})
-	if err != nil {
-		return err
+	bucket := []byte(DefaultKvBucket)
+	if err := handle.Update(func(tx *bolt.Tx) error {
+		_, e := tx.CreateBucketIfNotExists(bucket)
+		return e
+	}); err != nil {
+		_ = handle.Close()
+		return nil, fmt.Errorf("create bucket %q: %w", DefaultKvBucket, err)
 	}
 
-	s.handle = handler
-	s.bucket = []byte(DefaultKvBucket)
-	s.opened.Store(true)
-	s.refCount.Add(1)
-
-	return nil
+	return &DiskStore{path: path, handle: handle, bucket: bucket}, nil
 }
 
 // Get retrieves a value from the disk store.
 func (s *DiskStore) Get(key string) ([]byte, error) {
-	if err := s.open(); err != nil {
-		return nil, fmt.Errorf("failed to open disk store: %w", err)
-	}
-
 	var value []byte
 	err := s.handle.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
@@ -117,10 +79,6 @@ func (s *DiskStore) Get(key string) ([]byte, error) {
 
 // Set sets a value in the disk store.
 func (s *DiskStore) Set(key string, value []byte) error {
-	if err := s.open(); err != nil {
-		return fmt.Errorf("failed to open disk store: %w", err)
-	}
-
 	err := s.handle.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
 		if bucket == nil {
@@ -136,10 +94,6 @@ func (s *DiskStore) Set(key string, value []byte) error {
 
 // Delete removes a value from the disk store.
 func (s *DiskStore) Delete(key string) error {
-	if err := s.open(); err != nil {
-		return fmt.Errorf("failed to open disk store: %w", err)
-	}
-
 	err := s.handle.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
 		if bucket == nil {
@@ -155,10 +109,6 @@ func (s *DiskStore) Delete(key string) error {
 
 // Exists checks if a given key exists.
 func (s *DiskStore) Exists(key string) (bool, error) {
-	if err := s.open(); err != nil {
-		return false, fmt.Errorf("failed to open disk store: %w", err)
-	}
-
 	exists := false
 	err := s.handle.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
@@ -176,10 +126,6 @@ func (s *DiskStore) Exists(key string) (bool, error) {
 
 // Clear removes all keys from the store.
 func (s *DiskStore) Clear() error {
-	if err := s.open(); err != nil {
-		return fmt.Errorf("failed to open disk store: %w", err)
-	}
-
 	err := s.handle.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
 		if bucket == nil {
@@ -197,10 +143,6 @@ func (s *DiskStore) Clear() error {
 
 // Size returns the size of the store.
 func (s *DiskStore) Size() (int64, error) {
-	if err := s.open(); err != nil {
-		return 0, fmt.Errorf("failed to open disk store: %w", err)
-	}
-
 	var size int64
 	err := s.handle.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
@@ -220,10 +162,6 @@ func (s *DiskStore) Size() (int64, error) {
 // natural cursor order), optionally filtered by prefix and capped at limit
 // (when > 0).
 func (s *DiskStore) List(prefix string, limit int64) ([]RawEntry, error) {
-	if err := s.open(); err != nil {
-		return nil, fmt.Errorf("failed to open disk store: %w", err)
-	}
-
 	var entries []RawEntry
 	err := s.handle.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
@@ -256,22 +194,7 @@ func (s *DiskStore) List(prefix string, limit int64) ([]RawEntry, error) {
 	return entries, nil
 }
 
-// Close closes the disk store.
+// Close closes the underlying BoltDB file and releases its file lock.
 func (s *DiskStore) Close() error {
-	if !s.opened.Load() {
-		return nil
-	}
-
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.refCount.Add(-1) > 0 {
-		return nil
-	}
-
-	if err := s.handle.Close(); err != nil {
-		return err
-	}
-	s.opened.Store(false)
-	return nil
+	return s.handle.Close()
 }

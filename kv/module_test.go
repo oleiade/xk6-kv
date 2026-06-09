@@ -5,8 +5,13 @@ import (
 	"testing"
 )
 
+// TestBuildStore_Defaults exercises buildStore with the package defaults,
+// which include the disk backend. The default path is relative, so we point
+// cwd at a tempdir to keep the test hermetic — that rules out t.Parallel.
+//
+//nolint:paralleltest
 func TestBuildStore_Defaults(t *testing.T) {
-	t.Parallel()
+	t.Chdir(t.TempDir())
 
 	s, err := buildStore(Options{Backend: DefaultBackend, Serialization: DefaultSerialization})
 	if err != nil {
@@ -15,6 +20,7 @@ func TestBuildStore_Defaults(t *testing.T) {
 	if s == nil {
 		t.Fatal("buildStore() returned a nil store")
 	}
+	t.Cleanup(func() { _ = s.Close() })
 }
 
 func TestBuildStore_UnknownBackend(t *testing.T) {

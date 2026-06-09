@@ -47,12 +47,25 @@ var (
 
 // backendFactories registers the available raw storage backends. Adding a new
 // backend is a single map entry; OpenKv's validation and construction both
-// read from this map so the two paths cannot drift apart.
+// read from this map so the two paths cannot drift apart. The uniform
+// `(Backend, error)` signature lets backends that may fail at construction
+// (e.g. disk, which acquires a BoltDB file lock) share the call site with
+// infallible ones (e.g. memory).
 //
 //nolint:gochecknoglobals
-var backendFactories = map[string]func() store.Backend{
-	"memory": func() store.Backend { return store.NewMemoryStore() },
-	"disk":   func() store.Backend { return store.NewDiskStore(store.DefaultDiskStorePath) },
+var backendFactories = map[string]func() (store.Backend, error){
+	"memory": newMemoryBackend,
+	"disk":   newDiskBackend,
+}
+
+// newMemoryBackend always returns a nil error; the signature matches the
+// fallible backends so they can all share the factory map.
+//
+//nolint:unparam
+func newMemoryBackend() (store.Backend, error) { return store.NewMemoryStore(), nil }
+
+func newDiskBackend() (store.Backend, error) {
+	return store.NewDiskStore(store.DefaultDiskStorePath)
 }
 
 // serializerFactories registers the available serializers. See backendFactories.
@@ -137,7 +150,11 @@ func buildStore(options Options) (store.Store, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown serialization: %q", options.Serialization)
 	}
-	return store.NewSerializedStore(backendFactory(), serializerFactory()), nil
+	backend, err := backendFactory()
+	if err != nil {
+		return nil, fmt.Errorf("build %s backend: %w", options.Backend, err)
+	}
+	return store.NewSerializedStore(backend, serializerFactory()), nil
 }
 
 // Options represents the options for a KV instance.

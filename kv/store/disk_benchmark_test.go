@@ -9,7 +9,10 @@ import (
 
 func BenchmarkDiskStore(b *testing.B) {
 	runBackendBenchmarks(b, func(b *testing.B) Backend {
-		s := NewDiskStore(filepath.Join(b.TempDir(), "store.db"))
+		s, err := NewDiskStore(filepath.Join(b.TempDir(), "store.db"))
+		if err != nil {
+			b.Fatalf("NewDiskStore: %v", err)
+		}
 		b.Cleanup(func() { _ = s.Close() })
 		return s
 	})

@@ -6,16 +6,16 @@ package kv
 type ErrorName string
 
 const (
-	// DatabaseNotOpenError is emitted when the key-value store is accessed
-	// before openKv() has been called.
-	DatabaseNotOpenError ErrorName = "DatabaseNotOpenError"
-
-	// KeyNotFoundError is emitted when a lookup is performed for a key that
-	// does not exist in the store.
-	KeyNotFoundError ErrorName = "KeyNotFoundError"
+	// keyNotFoundErr is emitted when a lookup is performed for a key that
+	// does not exist in the store. The string value is the name surfaced to
+	// JS, kept stable for script-side `err.name === "KeyNotFoundError"`
+	// checks.
+	keyNotFoundErr ErrorName = "KeyNotFoundError"
 )
 
-// Error represents a custom error emitted by the kv module
+// Error represents a custom error emitted by the kv module to JS scripts.
+// Only fields are exported (so encoding/json can see them); construction is
+// package-private via newError.
 type Error struct {
 	// Name contains one of the strings associated with an error name.
 	Name ErrorName `json:"name"`
@@ -24,8 +24,7 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// NewError returns a new Error instance.
-func NewError(name ErrorName, message string) *Error {
+func newError(name ErrorName, message string) *Error {
 	return &Error{
 		Name:    name,
 		Message: message,
