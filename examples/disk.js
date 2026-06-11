@@ -9,8 +9,8 @@ const kv = openKv({
 
 export default async function () {
 	await kv.set("key", "value");
-	const value = await kv.get("key");
-	expect(value).toEqual("value");
+	const entry = await kv.get("key");
+	expect(entry.value).toEqual("value");
 
 	await kv.delete("key");
 	const exists = await kv.exists("key");

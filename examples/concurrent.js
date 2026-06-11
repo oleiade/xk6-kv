@@ -23,8 +23,9 @@ const kv = openKv({ backend: "memory" });
 
 export async function producer() {
   let latestProducerID = 0;
-  if (await kv.exists(`latest-producer-id`)) {
-    latestProducerID = await kv.get(`latest-producer-id`);
+  const latestProducer = await kv.get(`latest-producer-id`);
+  if (latestProducer.value !== null) {
+    latestProducerID = latestProducer.value;
   }
 
   console.log(`[producer]-> adding token ${latestProducerID}`);
@@ -41,8 +42,8 @@ export async function consumer() {
   // Let's list the existing tokens, and consume the first we find
   const entries = await kv.list({ prefix: "token-" });
   if (entries.length > 0) {
-    await kv.get(entries[0].key);
-    console.log(`[consumer]<- consumed token ${entries[0].key}`);
+    const token = await kv.get(entries[0].key);
+    console.log(`[consumer]<- consumed token ${entries[0].key}: ${token.value}`);
     await kv.delete(entries[0].key);
   } else {
     console.log("[consumer]<- no tokens available");

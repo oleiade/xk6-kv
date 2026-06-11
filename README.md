@@ -79,12 +79,12 @@ export default async function () {
     await kv.set("abc", 123);
     await kv.set("easy as", [1, 2, 3]);
 
-    const abcExists = await kv.exists("a b c")
-    if (!abcExists) {
+    const abc = await kv.get("a b c");
+    if (abc.value === null) {
       await kv.set("a b c", { "123": "baby you and me girl"});
     }
 
-    console.log(`current size of the KV store: ${kv.size()}`)
+    console.log(`current size of the KV store: ${await kv.size()}`)
 
     const entries = await kv.list({ prefix: "a" });
     for (const entry of entries) {
@@ -105,11 +105,11 @@ Opens a key-value store with the specified backend. Must be called in the init c
 
 ```typescript
 interface OpenKvOptions {
-    backend?: "memory" | "disk"; // Default is "memory"
+    backend?: "memory" | "disk"; // Default is "disk"
 }
 ```
 
-- **memory**: In-memory backend that's fast and shared across all VUs (default)
+- **memory**: In-memory backend that's fast and shared across all VUs
 - **disk**: Persistent BoltDB-based backend that survives between test runs
 
 #### Performance Considerations
@@ -120,11 +120,14 @@ While both backends are optimized for performance and suitable for most load tes
 - For extremely high throughput requirements, you might need alternative solutions
 
 #### KV Methods
-- `set(key: string, value: any): Promise<any>`
+- `set(key: string, value: any): Promise<{ ok: true; versionstamp: string }>`
   - Sets a key-value pair. Accepts any JSON-serializable value.
   
-- `get(key: string): Promise<any>`
-  - Retrieves a value by key. Throws if key doesn't exist.
+- `get(key: string): Promise<Entry>`
+  - Retrieves a versioned entry by key. Missing keys return `{ key, value: null, versionstamp: null }`.
+
+- `getMany(keys: string[]): Promise<Entry[]>`
+  - Retrieves versioned entries for multiple keys in the same order as the input keys.
   
 - `delete(key: string): Promise<void>`
   - Removes a key-value pair.
@@ -133,13 +136,31 @@ While both backends are optimized for performance and suitable for most load tes
   - Checks if a given key exists.
   
 - `list(options: ListOptions): Promise<Array<Entry>>`
-  - Returns filtered key-value pairs.
+  - Returns filtered versioned entries.
   
 - `clear(): Promise<void>`
   - Removes all entries.
   
 - `size(): number`
   - Returns current store size.
+
+- `atomic(): AtomicOperation`
+  - Creates a Deno KV-style atomic operation builder.
+
+```typescript
+interface Entry {
+    key: string;
+    value: any | null;
+    versionstamp: string | null;
+}
+
+interface AtomicOperation {
+    check(...checks: Entry[]): AtomicOperation;
+    set(key: string, value: any): AtomicOperation;
+    delete(key: string): AtomicOperation;
+    commit(): Promise<{ ok: true; versionstamp: string } | { ok: false }>;
+}
+```
 
 ### ListOptions Interface
 ```typescript
@@ -152,6 +173,32 @@ interface ListOptions {
 ## Examples
 
 A common use case for xk6-kv is sharing state between VUs for workflows such as producer-consumer patterns or rendez-vous points. The following example demonstrates a producer-consumer workflow where one VU produces tokens and another consumes them, coordinating through the shared key-value store.
+
+### Atomic updates
+
+Use `atomic()` when multiple VUs may read and update the same key concurrently. The operation commits only if the checked entry still has the same `versionstamp`; otherwise it returns `{ ok: false }` and you can retry with a fresh read.
+
+See [examples/atomic.js](examples/atomic.js) for a runnable k6 script.
+
+```javascript
+async function incrementCounter(kv, key) {
+  for (;;) {
+    const entry = await kv.get(key);
+    const current = entry.value === null ? 0 : entry.value;
+
+    const result = await kv.atomic()
+      .check(entry)
+      .set(key, current + 1)
+      .commit();
+
+    if (result.ok) {
+      return current + 1;
+    }
+  }
+}
+```
+
+### Producer-consumer
 
 ```javascript
 import { sleep } from "k6";
@@ -179,8 +226,9 @@ const kv = openKv({ backend: "memory" });
 
 export async function producer() {
   let latestProducerID = 0;
-  if (await kv.exists(`latest-producer-id`)) {
-    latestProducerID = await kv.get(`latest-producer-id`);
+  const latestProducer = await kv.get(`latest-producer-id`);
+  if (latestProducer.value !== null) {
+    latestProducerID = latestProducer.value;
   }
 
   console.log(`[producer]-> adding token ${latestProducerID}`);
@@ -197,8 +245,8 @@ export async function consumer() {
   // Let's list the existing tokens, and consume the first we find
   const entries = await kv.list({ prefix: "token-" });
   if (entries.length > 0) {
-    await kv.get(entries[0].key);
-    console.log(`[consumer]<- consumed token ${entries[0].key}`);
+    const token = await kv.get(entries[0].key);
+    console.log(`[consumer]<- consumed token ${entries[0].key}: ${token.value}`);
     await kv.delete(entries[0].key);
   } else {
     console.log("[consumer]<- no tokens available");
