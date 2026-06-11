@@ -25,7 +25,7 @@ func (s *SerializedStore) Get(key string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if entry.Versionstamp == "" {
+	if !entry.Found {
 		return nil, fmt.Errorf("key %s not found", key)
 	}
 
@@ -38,7 +38,7 @@ func (s *SerializedStore) GetEntry(key string) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	if entry.Versionstamp == "" {
+	if !entry.Found {
 		return entry, nil
 	}
 
@@ -131,7 +131,7 @@ func (s *SerializedStore) AtomicCommit(checks []Check, mutations []Mutation) (Co
 func (s *SerializedStore) deserializeEntries(rawEntries []Entry) ([]Entry, error) {
 	entries := make([]Entry, len(rawEntries))
 	for i, entry := range rawEntries {
-		if entry.Versionstamp == "" {
+		if !entry.Found {
 			entries[i] = entry
 			continue
 		}

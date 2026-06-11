@@ -12,8 +12,8 @@ type Store interface {
 
 	// GetEntry returns the key's value and versionstamp.
 	//
-	// If the key does not exist, the returned entry has a nil value and an
-	// empty versionstamp.
+	// If the key does not exist, the returned entry has Found set to false,
+	// a nil value, and an empty versionstamp.
 	GetEntry(key string) (Entry, error)
 
 	// GetMany returns entries for keys in the same order as the input keys.
@@ -49,6 +49,10 @@ type Entry struct {
 	Key          string
 	Value        any
 	Versionstamp string
+
+	// Found reports whether the key exists in the store. It distinguishes a
+	// present key from an absent one without relying on the versionstamp.
+	Found bool
 }
 
 // Check represents a versionstamp precondition for an atomic commit.

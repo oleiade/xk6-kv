@@ -145,6 +145,7 @@ func (s *DiskStore) GetEntry(key string) (Entry, error) {
 
 		entry.Value = cloneBytes(value)
 		entry.Versionstamp = string(versions.Get([]byte(key)))
+		entry.Found = true
 		return nil
 	})
 	if err != nil {
@@ -179,6 +180,7 @@ func (s *DiskStore) GetMany(keys []string) ([]Entry, error) {
 			}
 			entries[i].Value = cloneBytes(value)
 			entries[i].Versionstamp = string(versions.Get([]byte(key)))
+			entries[i].Found = true
 		}
 
 		return nil
@@ -381,6 +383,7 @@ func (s *DiskStore) List(prefix string, limit int64) ([]Entry, error) {
 				Key:          key,
 				Value:        cloneBytes(v),
 				Versionstamp: string(versions.Get(k)),
+				Found:        true,
 			})
 			count++
 		}

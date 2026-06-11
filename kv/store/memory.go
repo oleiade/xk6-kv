@@ -52,6 +52,7 @@ func (s *MemoryStore) GetEntry(key string) (Entry, error) {
 		Key:          key,
 		Value:        cloneBytes(value),
 		Versionstamp: s.versions[key],
+		Found:        true,
 	}, nil
 }
 
@@ -66,6 +67,7 @@ func (s *MemoryStore) GetMany(keys []string) ([]Entry, error) {
 		if value, ok := s.container[key]; ok {
 			entries[i].Value = cloneBytes(value)
 			entries[i].Versionstamp = s.versions[key]
+			entries[i].Found = true
 		}
 	}
 
@@ -154,6 +156,7 @@ func (s *MemoryStore) List(prefix string, limit int64) ([]Entry, error) {
 			Key:          k,
 			Value:        cloneBytes(s.container[k]),
 			Versionstamp: s.versions[k],
+			Found:        true,
 		})
 		count++
 	}
