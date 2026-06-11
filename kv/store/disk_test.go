@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestNewDiskStore(t *testing.T) {
@@ -481,6 +483,71 @@ func TestDiskStore_RefCount(t *testing.T) {
 }
 
 // Helper function to set up a temporary disk store for testing
+// seedLegacyDiskValue writes a value the way a pre-versionstamp release would:
+// straight into the data bucket, with no matching entry in the versions bucket.
+func seedLegacyDiskValue(t *testing.T, path, key string, value []byte) {
+	t.Helper()
+
+	db, err := bolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatalf("failed to open legacy bolt db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		bucket, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
+		if bucketErr != nil {
+			return bucketErr
+		}
+
+		return bucket.Put([]byte(key), value)
+	})
+	if err != nil {
+		t.Fatalf("failed to seed legacy data: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("failed to close legacy bolt db: %v", err)
+	}
+}
+
+// TestDiskStore_LegacyVersionstampBackfill verifies that values written by a
+// pre-versionstamp release stay readable after the upgrade and are no longer
+// mistaken for absent keys by an atomic absent-check.
+func TestDiskStore_LegacyVersionstampBackfill(t *testing.T) {
+	t.Parallel()
+
+	tempFile := setupTempDiskStore(t)
+	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+
+	seedLegacyDiskValue(t, tempFile, "legacy", []byte(`"value"`))
+
+	disk := NewDiskStore()
+	disk.path = tempFile
+	store := NewSerializedStore(disk, NewJSONSerializer())
+	t.Cleanup(func() { _ = store.Close() })
+
+	// The legacy value must remain readable after the upgrade.
+	value, err := store.Get("legacy")
+	if err != nil {
+		t.Fatalf("Get() on legacy key returned an error: %v", err)
+	}
+	if value != "value" {
+		t.Fatalf("Get() returned unexpected legacy value, got %#v, want %q", value, "value")
+	}
+
+	// An absent-check must not match a key that already holds a value.
+	result, err := disk.AtomicCommit(
+		[]Check{{Key: "legacy"}},
+		[]Mutation{{Type: MutationSet, Key: "legacy", Value: []byte("overwritten")}},
+	)
+	if err != nil {
+		t.Fatalf("AtomicCommit() returned an error: %v", err)
+	}
+	if result.Ok {
+		t.Fatal("AtomicCommit() absent-check matched a present legacy key")
+	}
+}
+
 func setupTempDiskStore(t *testing.T) string {
 	// Create a temporary file
 	tempFile, err := os.CreateTemp(t.TempDir(), "diskstore-test-*.db") //nolint:forbidigo

@@ -65,17 +65,17 @@ func (s *DiskStore) open() error {
 	}
 
 	err = handler.Update(func(tx *bolt.Tx) error {
-		_, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
+		bucket, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
 		if bucketErr != nil {
 			return fmt.Errorf("failed to create internal bucket: %w", bucketErr)
 		}
 
-		_, bucketErr = tx.CreateBucketIfNotExists([]byte(DefaultKvVersionBucket))
+		versions, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvVersionBucket))
 		if bucketErr != nil {
 			return fmt.Errorf("failed to create internal versions bucket: %w", bucketErr)
 		}
 
-		return nil
+		return backfillVersionstamps(tx, bucket, versions)
 	})
 	if err != nil {
 		return err
@@ -495,6 +495,36 @@ func deleteDiskMutation(bucket, versions *bolt.Bucket, key string) error {
 
 func formatDiskVersionstamp(tx *bolt.Tx) string {
 	return fmt.Sprintf("%020d", tx.ID())
+}
+
+// backfillVersionstamps assigns a versionstamp to every key written by a
+// pre-versionstamp release. Such keys live in the data bucket with no entry in
+// the versions bucket; left untouched they would read back as absent and an
+// atomic absent-check would match a key that actually holds a value. Keys that
+// already carry a versionstamp are left untouched, so this is a no-op once a
+// store has been migrated.
+func backfillVersionstamps(tx *bolt.Tx, bucket, versions *bolt.Bucket) error {
+	var missing [][]byte
+	err := bucket.ForEach(func(k, _ []byte) error {
+		if versions.Get(k) == nil {
+			// ForEach reuses the key slice across iterations; copy it.
+			missing = append(missing, append([]byte(nil), k...))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	versionstamp := []byte(formatDiskVersionstamp(tx))
+	for _, key := range missing {
+		if err := versions.Put(key, versionstamp); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Close closes the disk store.
