@@ -314,6 +314,72 @@ func TestMemoryStore_Concurrency(t *testing.T) {
 	// If we got here without deadlocking, the test passes
 }
 
+func TestMemoryStore_AtomicCommitConcurrentAbsentCheck(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryStore()
+
+	const goroutines = 20
+	results := make(chan CommitResult, goroutines)
+	for range make([]struct{}, goroutines) {
+		go func() {
+			result, err := store.AtomicCommit(
+				[]Check{{Key: "lock"}},
+				[]Mutation{{Type: MutationSet, Key: "lock", Value: []byte("owner")}},
+			)
+			if err != nil {
+				t.Errorf("AtomicCommit() returned error: %v", err)
+				return
+			}
+			results <- result
+		}()
+	}
+
+	var wins int
+	for range make([]struct{}, goroutines) {
+		result := <-results
+		if result.Ok {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("AtomicCommit() allowed %d absent-check winners, want 1", wins)
+	}
+}
+
+func TestSerializedStore_AtomicCommitConcurrentAbsentCheck(t *testing.T) {
+	t.Parallel()
+
+	store := NewSerializedStore(NewMemoryStore(), NewJSONSerializer())
+
+	const goroutines = 20
+	results := make(chan CommitResult, goroutines)
+	for range make([]struct{}, goroutines) {
+		go func() {
+			result, err := store.AtomicCommit(
+				[]Check{{Key: "lock"}},
+				[]Mutation{{Type: MutationSet, Key: "lock", Value: "owner"}},
+			)
+			if err != nil {
+				t.Errorf("AtomicCommit() returned error: %v", err)
+				return
+			}
+			results <- result
+		}()
+	}
+
+	var wins int
+	for range make([]struct{}, goroutines) {
+		result := <-results
+		if result.Ok {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("AtomicCommit() allowed %d absent-check winners, want 1", wins)
+	}
+}
+
 // TestMemoryStore_TableDemonstrates demonstrates the table-driven testing approach
 func TestMemoryStore_TableDriven(t *testing.T) {
 	t.Parallel()

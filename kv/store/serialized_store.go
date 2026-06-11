@@ -21,24 +21,43 @@ func NewSerializedStore(store Store, serializer Serializer) *SerializedStore {
 
 // Get retrieves a value from the store and deserializes it.
 func (s *SerializedStore) Get(key string) (any, error) {
-	// Get the raw value from the store
-	rawValue, err := s.store.Get(key)
+	entry, err := s.store.GetEntry(key)
+	if err != nil {
+		return nil, err
+	}
+	if !entry.Found {
+		return nil, fmt.Errorf("key %s not found", key)
+	}
+
+	return s.deserializeValue(entry.Value)
+}
+
+// GetEntry retrieves an entry from the store and deserializes its value.
+func (s *SerializedStore) GetEntry(key string) (Entry, error) {
+	entry, err := s.store.GetEntry(key)
+	if err != nil {
+		return Entry{}, err
+	}
+	if !entry.Found {
+		return entry, nil
+	}
+
+	entry.Value, err = s.deserializeValue(entry.Value)
+	if err != nil {
+		return Entry{}, fmt.Errorf("failed to deserialize value for key %s: %w", entry.Key, err)
+	}
+
+	return entry, nil
+}
+
+// GetMany retrieves entries from the store and deserializes their values.
+func (s *SerializedStore) GetMany(keys []string) ([]Entry, error) {
+	entries, err := s.store.GetMany(keys)
 	if err != nil {
 		return nil, err
 	}
 
-	// Handle string values from stores that don't use byte slices
-	if strValue, ok := rawValue.(string); ok {
-		return s.serializer.Deserialize([]byte(strValue))
-	}
-
-	// Handle byte slice values
-	if byteValue, ok := rawValue.([]byte); ok {
-		return s.serializer.Deserialize(byteValue)
-	}
-
-	// If the value is already deserialized (e.g., from memory store)
-	return rawValue, nil
+	return s.deserializeEntries(entries)
 }
 
 // Set serializes a value and stores it.
@@ -82,36 +101,63 @@ func (s *SerializedStore) List(prefix string, limit int64) ([]Entry, error) {
 	}
 
 	// Deserialize each entry's value
+	return s.deserializeEntries(rawEntries)
+}
+
+// Close closes the underlying store.
+func (s *SerializedStore) Close() error {
+	return s.store.Close()
+}
+
+// AtomicCommit serializes set mutations and commits them to the underlying store.
+func (s *SerializedStore) AtomicCommit(checks []Check, mutations []Mutation) (CommitResult, error) {
+	serializedMutations := make([]Mutation, len(mutations))
+	for i, mutation := range mutations {
+		serializedMutations[i] = mutation
+		if mutation.Type != MutationSet {
+			continue
+		}
+
+		serializedValue, err := s.serializer.Serialize(mutation.Value)
+		if err != nil {
+			return CommitResult{}, fmt.Errorf("failed to serialize value for key %s: %w", mutation.Key, err)
+		}
+		serializedMutations[i].Value = serializedValue
+	}
+
+	return s.store.AtomicCommit(checks, serializedMutations)
+}
+
+func (s *SerializedStore) deserializeEntries(rawEntries []Entry) ([]Entry, error) {
 	entries := make([]Entry, len(rawEntries))
 	for i, entry := range rawEntries {
-		// Handle string values from stores that don't use byte slices
-		if strValue, ok := entry.Value.(string); ok {
-			deserializedValue, err := s.serializer.Deserialize([]byte(strValue))
-			if err != nil {
-				return nil, fmt.Errorf("failed to deserialize value for key %s: %w", entry.Key, err)
-			}
-			entries[i] = Entry{Key: entry.Key, Value: deserializedValue}
+		if !entry.Found {
+			entries[i] = entry
 			continue
 		}
 
-		// Handle byte slice values
-		if byteValue, ok := entry.Value.([]byte); ok {
-			deserializedValue, err := s.serializer.Deserialize(byteValue)
-			if err != nil {
-				return nil, fmt.Errorf("failed to deserialize value for key %s: %w", entry.Key, err)
-			}
-			entries[i] = Entry{Key: entry.Key, Value: deserializedValue}
-			continue
+		deserializedValue, err := s.deserializeValue(entry.Value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to deserialize value for key %s: %w", entry.Key, err)
 		}
-
-		// If the value is already deserialized (e.g., from memory store)
+		entry.Value = deserializedValue
 		entries[i] = entry
 	}
 
 	return entries, nil
 }
 
-// Close closes the underlying store.
-func (s *SerializedStore) Close() error {
-	return s.store.Close()
+func (s *SerializedStore) deserializeValue(rawValue any) (any, error) {
+	// Handle string values from stores that don't use byte slices
+	if strValue, ok := rawValue.(string); ok {
+		return s.serializer.Deserialize([]byte(strValue))
+	}
+
+	// Handle byte slice values
+	if byteValue, ok := rawValue.([]byte); ok {
+		return s.serializer.Deserialize(byteValue)
+	}
+
+	// If the value is already deserialized (e.g., from memory store)
+	return rawValue, nil
 }

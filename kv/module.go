@@ -9,6 +9,7 @@ package kv
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/grafana/sobek"
 	"go.k6.io/k6/v2/js/common"
@@ -21,6 +22,7 @@ type (
 	// RootModule is the global module instance that will create Client
 	// instances for each VU.
 	RootModule struct {
+		lock  sync.Mutex
 		store store.Store
 	}
 
@@ -69,6 +71,9 @@ func (mi *ModuleInstance) OpenKv(opts sobek.Value) *sobek.Object {
 		common.Throw(mi.vu.Runtime(), err)
 		return nil
 	}
+
+	mi.rm.lock.Lock()
+	defer mi.rm.lock.Unlock()
 
 	if mi.rm.store == nil {
 		// Create the base store based on the backend option

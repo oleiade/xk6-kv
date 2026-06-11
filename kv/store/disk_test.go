@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestNewDiskStore(t *testing.T) {
@@ -481,6 +483,71 @@ func TestDiskStore_RefCount(t *testing.T) {
 }
 
 // Helper function to set up a temporary disk store for testing
+// seedLegacyDiskValue writes a value the way a pre-versionstamp release would:
+// straight into the data bucket, with no matching entry in the versions bucket.
+func seedLegacyDiskValue(t *testing.T, path, key string, value []byte) {
+	t.Helper()
+
+	db, err := bolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatalf("failed to open legacy bolt db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		bucket, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
+		if bucketErr != nil {
+			return bucketErr
+		}
+
+		return bucket.Put([]byte(key), value)
+	})
+	if err != nil {
+		t.Fatalf("failed to seed legacy data: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("failed to close legacy bolt db: %v", err)
+	}
+}
+
+// TestDiskStore_LegacyVersionstampBackfill verifies that values written by a
+// pre-versionstamp release stay readable after the upgrade and are no longer
+// mistaken for absent keys by an atomic absent-check.
+func TestDiskStore_LegacyVersionstampBackfill(t *testing.T) {
+	t.Parallel()
+
+	tempFile := setupTempDiskStore(t)
+	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+
+	seedLegacyDiskValue(t, tempFile, "legacy", []byte(`"value"`))
+
+	disk := NewDiskStore()
+	disk.path = tempFile
+	store := NewSerializedStore(disk, NewJSONSerializer())
+	t.Cleanup(func() { _ = store.Close() })
+
+	// The legacy value must remain readable after the upgrade.
+	value, err := store.Get("legacy")
+	if err != nil {
+		t.Fatalf("Get() on legacy key returned an error: %v", err)
+	}
+	if value != "value" {
+		t.Fatalf("Get() returned unexpected legacy value, got %#v, want %q", value, "value")
+	}
+
+	// An absent-check must not match a key that already holds a value.
+	result, err := disk.AtomicCommit(
+		[]Check{{Key: "legacy"}},
+		[]Mutation{{Type: MutationSet, Key: "legacy", Value: []byte("overwritten")}},
+	)
+	if err != nil {
+		t.Fatalf("AtomicCommit() returned an error: %v", err)
+	}
+	if result.Ok {
+		t.Fatal("AtomicCommit() absent-check matched a present legacy key")
+	}
+}
+
 func setupTempDiskStore(t *testing.T) string {
 	// Create a temporary file
 	tempFile, err := os.CreateTemp(t.TempDir(), "diskstore-test-*.db") //nolint:forbidigo
@@ -777,5 +844,226 @@ func TestDiskStore_TableDriven(t *testing.T) {
 			tc.validate(t, result, err)
 			tc.cleanup(store)
 		})
+	}
+}
+
+func newTempDiskStore(t *testing.T) *DiskStore {
+	t.Helper()
+
+	// setupTempDiskStore places the file under t.TempDir(), which is removed
+	// automatically when the test finishes, so no explicit cleanup is needed.
+	store := NewDiskStore()
+	store.path = setupTempDiskStore(t)
+	t.Cleanup(func() { _ = store.Close() })
+
+	return store
+}
+
+func TestDiskStore_GetEntry(t *testing.T) {
+	t.Parallel()
+
+	store := newTempDiskStore(t)
+
+	// Absent key: Found is false, with a nil value and empty versionstamp.
+	absent, err := store.GetEntry("missing")
+	if err != nil {
+		t.Fatalf("GetEntry() on a missing key returned an error: %v", err)
+	}
+	if absent.Found {
+		t.Fatal("GetEntry() reported a missing key as present")
+	}
+	if absent.Value != nil {
+		t.Fatalf("GetEntry() on a missing key returned a non-nil value: %#v", absent.Value)
+	}
+	if absent.Versionstamp != "" {
+		t.Fatalf("GetEntry() on a missing key returned a versionstamp: %q", absent.Versionstamp)
+	}
+
+	// Present key: Found is true, with the stored value and a versionstamp.
+	if err := store.Set("present", []byte("value")); err != nil {
+		t.Fatalf("Set() returned an error: %v", err)
+	}
+	entry, err := store.GetEntry("present")
+	if err != nil {
+		t.Fatalf("GetEntry() on a present key returned an error: %v", err)
+	}
+	if !entry.Found {
+		t.Fatal("GetEntry() reported a present key as missing")
+	}
+	if string(entry.Value.([]byte)) != "value" {
+		t.Fatalf("GetEntry() returned unexpected value, got %#v, want %q", entry.Value, "value")
+	}
+	if entry.Versionstamp == "" {
+		t.Fatal("GetEntry() returned an empty versionstamp for a present key")
+	}
+}
+
+func TestDiskStore_GetMany(t *testing.T) {
+	t.Parallel()
+
+	store := newTempDiskStore(t)
+
+	if err := store.Set("a", []byte("1")); err != nil {
+		t.Fatalf("Set() returned an error: %v", err)
+	}
+	if err := store.Set("c", []byte("3")); err != nil {
+		t.Fatalf("Set() returned an error: %v", err)
+	}
+
+	// Order must match the input keys, with a placeholder for the absent key.
+	entries, err := store.GetMany([]string{"a", "b", "c"})
+	if err != nil {
+		t.Fatalf("GetMany() returned an error: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("GetMany() returned %d entries, want 3", len(entries))
+	}
+
+	wantKeys := []string{"a", "b", "c"}
+	for i, want := range wantKeys {
+		if entries[i].Key != want {
+			t.Fatalf("GetMany() entry %d has key %q, want %q", i, entries[i].Key, want)
+		}
+	}
+
+	if !entries[0].Found || string(entries[0].Value.([]byte)) != "1" {
+		t.Fatalf("GetMany() entry for %q is wrong: %+v", "a", entries[0])
+	}
+	if entries[1].Found {
+		t.Fatalf("GetMany() reported absent key %q as present: %+v", "b", entries[1])
+	}
+	if !entries[2].Found || string(entries[2].Value.([]byte)) != "3" {
+		t.Fatalf("GetMany() entry for %q is wrong: %+v", "c", entries[2])
+	}
+}
+
+func TestDiskStore_VersionstampMonotonic(t *testing.T) {
+	t.Parallel()
+
+	store := newTempDiskStore(t)
+
+	if err := store.Set("k", []byte("v1")); err != nil {
+		t.Fatalf("Set() returned an error: %v", err)
+	}
+	first, err := store.GetEntry("k")
+	if err != nil {
+		t.Fatalf("GetEntry() returned an error: %v", err)
+	}
+
+	if err := store.Set("k", []byte("v2")); err != nil {
+		t.Fatalf("Set() returned an error: %v", err)
+	}
+	second, err := store.GetEntry("k")
+	if err != nil {
+		t.Fatalf("GetEntry() returned an error: %v", err)
+	}
+
+	// Versionstamps are fixed-width, so lexical order matches write order.
+	if second.Versionstamp <= first.Versionstamp {
+		t.Fatalf("versionstamp did not advance: first=%q second=%q", first.Versionstamp, second.Versionstamp)
+	}
+}
+
+func TestDiskStore_AtomicCommit(t *testing.T) {
+	t.Parallel()
+
+	store := newTempDiskStore(t)
+
+	// A commit whose checks all hold applies its mutations and reports a versionstamp.
+	result, err := store.AtomicCommit(
+		[]Check{{Key: "k"}}, // expect "k" absent
+		[]Mutation{{Type: MutationSet, Key: "k", Value: []byte("v")}},
+	)
+	if err != nil {
+		t.Fatalf("AtomicCommit() returned an error: %v", err)
+	}
+	if !result.Ok {
+		t.Fatal("AtomicCommit() with a satisfied check did not commit")
+	}
+	if result.Versionstamp == "" {
+		t.Fatal("AtomicCommit() committed without returning a versionstamp")
+	}
+
+	entry, err := store.GetEntry("k")
+	if err != nil {
+		t.Fatalf("GetEntry() returned an error: %v", err)
+	}
+	if !entry.Found || string(entry.Value.([]byte)) != "v" {
+		t.Fatalf("AtomicCommit() did not persist the mutation: %+v", entry)
+	}
+	if entry.Versionstamp != result.Versionstamp {
+		t.Fatalf("stored versionstamp %q does not match commit result %q", entry.Versionstamp, result.Versionstamp)
+	}
+
+	// A commit whose check no longer holds is rejected and changes nothing.
+	rejected, err := store.AtomicCommit(
+		[]Check{{Key: "k"}}, // expect "k" absent, but it now holds "v"
+		[]Mutation{{Type: MutationSet, Key: "k", Value: []byte("other")}},
+	)
+	if err != nil {
+		t.Fatalf("AtomicCommit() returned an error: %v", err)
+	}
+	if rejected.Ok {
+		t.Fatal("AtomicCommit() applied mutations despite a failed check")
+	}
+
+	unchanged, err := store.GetEntry("k")
+	if err != nil {
+		t.Fatalf("GetEntry() returned an error: %v", err)
+	}
+	if string(unchanged.Value.([]byte)) != "v" {
+		t.Fatalf("rejected commit mutated the store: %+v", unchanged)
+	}
+
+	// A delete mutation behind a matching versionstamp check removes the key.
+	deleted, err := store.AtomicCommit(
+		[]Check{{Key: "k", Versionstamp: unchanged.Versionstamp}},
+		[]Mutation{{Type: MutationDelete, Key: "k"}},
+	)
+	if err != nil {
+		t.Fatalf("AtomicCommit() returned an error: %v", err)
+	}
+	if !deleted.Ok {
+		t.Fatal("AtomicCommit() with a matching versionstamp check did not commit")
+	}
+
+	gone, err := store.GetEntry("k")
+	if err != nil {
+		t.Fatalf("GetEntry() returned an error: %v", err)
+	}
+	if gone.Found {
+		t.Fatal("AtomicCommit() delete mutation left the key in place")
+	}
+}
+
+func TestDiskStore_AtomicCommitConcurrentAbsentCheck(t *testing.T) {
+	t.Parallel()
+
+	store := newTempDiskStore(t)
+
+	const goroutines = 20
+	results := make(chan CommitResult, goroutines)
+	for range goroutines {
+		go func() {
+			result, err := store.AtomicCommit(
+				[]Check{{Key: "lock"}},
+				[]Mutation{{Type: MutationSet, Key: "lock", Value: []byte("owner")}},
+			)
+			if err != nil {
+				t.Errorf("AtomicCommit() returned error: %v", err)
+				return
+			}
+			results <- result
+		}()
+	}
+
+	var wins int
+	for range goroutines {
+		if result := <-results; result.Ok {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("AtomicCommit() allowed %d absent-check winners, want 1", wins)
 	}
 }

@@ -11,12 +11,13 @@ import (
 
 // DiskStore is a key-value store that uses a BoltDB database on disk.
 type DiskStore struct {
-	path     string
-	handle   *bolt.DB
-	bucket   []byte
-	opened   atomic.Bool
-	refCount atomic.Int64
-	lock     sync.Mutex
+	path          string
+	handle        *bolt.DB
+	bucket        []byte
+	versionBucket []byte
+	opened        atomic.Bool
+	refCount      atomic.Int64
+	lock          sync.Mutex
 }
 
 const (
@@ -25,6 +26,9 @@ const (
 
 	// DefaultKvBucket is the default bucket name for the KV store
 	DefaultKvBucket = "k6"
+
+	// DefaultKvVersionBucket is the default bucket name for per-key versionstamps.
+	DefaultKvVersionBucket = "k6_versions"
 )
 
 // NewDiskStore creates a new DiskStore instance.
@@ -61,12 +65,17 @@ func (s *DiskStore) open() error {
 	}
 
 	err = handler.Update(func(tx *bolt.Tx) error {
-		_, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
+		bucket, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
 		if bucketErr != nil {
 			return fmt.Errorf("failed to create internal bucket: %w", bucketErr)
 		}
 
-		return nil
+		versions, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvVersionBucket))
+		if bucketErr != nil {
+			return fmt.Errorf("failed to create internal versions bucket: %w", bucketErr)
+		}
+
+		return backfillVersionstamps(tx, bucket, versions)
 	})
 	if err != nil {
 		return err
@@ -74,6 +83,7 @@ func (s *DiskStore) open() error {
 
 	s.handle = handler
 	s.bucket = []byte(DefaultKvBucket)
+	s.versionBucket = []byte(DefaultKvVersionBucket)
 	s.opened.Store(true)
 	s.refCount.Add(1)
 
@@ -96,7 +106,7 @@ func (s *DiskStore) Get(key string) (any, error) {
 			return fmt.Errorf("bucket %s not found", s.bucket)
 		}
 
-		value = bucket.Get([]byte(key))
+		value = cloneBytes(bucket.Get([]byte(key)))
 		return nil
 	})
 	if err != nil {
@@ -111,6 +121,77 @@ func (s *DiskStore) Get(key string) (any, error) {
 	return value, nil
 }
 
+// GetEntry returns the value and versionstamp for a key.
+func (s *DiskStore) GetEntry(key string) (Entry, error) {
+	if err := s.open(); err != nil {
+		return Entry{}, fmt.Errorf("failed to open disk store: %w", err)
+	}
+
+	entry := Entry{Key: key}
+	err := s.handle.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(s.bucket)
+		versions := tx.Bucket(s.versionBucket)
+		if bucket == nil {
+			return fmt.Errorf("bucket %s not found", s.bucket)
+		}
+		if versions == nil {
+			return fmt.Errorf("bucket %s not found", s.versionBucket)
+		}
+
+		value := bucket.Get([]byte(key))
+		if value == nil {
+			return nil
+		}
+
+		entry.Value = cloneBytes(value)
+		entry.Versionstamp = string(versions.Get([]byte(key)))
+		entry.Found = true
+		return nil
+	})
+	if err != nil {
+		return Entry{}, fmt.Errorf("unable to get entry from disk store: %w", err)
+	}
+
+	return entry, nil
+}
+
+// GetMany returns entries for the given keys in input order.
+func (s *DiskStore) GetMany(keys []string) ([]Entry, error) {
+	if err := s.open(); err != nil {
+		return nil, fmt.Errorf("failed to open disk store: %w", err)
+	}
+
+	entries := make([]Entry, len(keys))
+	err := s.handle.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(s.bucket)
+		versions := tx.Bucket(s.versionBucket)
+		if bucket == nil {
+			return fmt.Errorf("bucket %s not found", s.bucket)
+		}
+		if versions == nil {
+			return fmt.Errorf("bucket %s not found", s.versionBucket)
+		}
+
+		for i, key := range keys {
+			entries[i] = Entry{Key: key}
+			value := bucket.Get([]byte(key))
+			if value == nil {
+				continue
+			}
+			entries[i].Value = cloneBytes(value)
+			entries[i].Versionstamp = string(versions.Get([]byte(key)))
+			entries[i].Found = true
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("unable to get entries from disk store: %w", err)
+	}
+
+	return entries, nil
+}
+
 // Set sets a value in the disk store.
 func (s *DiskStore) Set(key string, value any) error {
 	// Ensure the store is open
@@ -118,25 +199,27 @@ func (s *DiskStore) Set(key string, value any) error {
 		return fmt.Errorf("failed to open disk store: %w", err)
 	}
 
-	// Convert value to bytes if it's not already
-	var valueBytes []byte
-	switch v := value.(type) {
-	case []byte:
-		valueBytes = v
-	case string:
-		valueBytes = []byte(v)
-	default:
-		return fmt.Errorf("unsupported value type for disk store: %T", value)
+	valueBytes, err := bytesFromValue(value, "disk store")
+	if err != nil {
+		return err
 	}
 
 	// Update the value in the database within a BoltDB transaction
-	err := s.handle.Update(func(tx *bolt.Tx) error {
+	err = s.handle.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
+		versions := tx.Bucket(s.versionBucket)
 		if bucket == nil {
 			return fmt.Errorf("bucket not found")
 		}
+		if versions == nil {
+			return fmt.Errorf("versions bucket not found")
+		}
 
-		return bucket.Put([]byte(key), valueBytes)
+		if err := bucket.Put([]byte(key), valueBytes); err != nil {
+			return err
+		}
+
+		return versions.Put([]byte(key), []byte(formatDiskVersionstamp(tx)))
 	})
 	if err != nil {
 		return fmt.Errorf("unable to insert value into disk store: %w", err)
@@ -154,11 +237,19 @@ func (s *DiskStore) Delete(key string) error {
 
 	err := s.handle.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
+		versions := tx.Bucket(s.versionBucket)
 		if bucket == nil {
 			return fmt.Errorf("bucket %s not found", s.bucket)
 		}
+		if versions == nil {
+			return fmt.Errorf("bucket %s not found", s.versionBucket)
+		}
 
-		return bucket.Delete([]byte(key))
+		if err := bucket.Delete([]byte(key)); err != nil {
+			return err
+		}
+
+		return versions.Delete([]byte(key))
 	})
 	if err != nil {
 		return fmt.Errorf("unable to delete value from disk store: %w", err)
@@ -200,12 +291,22 @@ func (s *DiskStore) Clear() error {
 
 	err := s.handle.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
+		versions := tx.Bucket(s.versionBucket)
 		if bucket == nil {
 			return fmt.Errorf("bucket %s not found", s.bucket)
 		}
+		if versions == nil {
+			return fmt.Errorf("bucket %s not found", s.versionBucket)
+		}
 
-		return bucket.ForEach(func(k, _ []byte) error {
+		if err := bucket.ForEach(func(k, _ []byte) error {
 			return bucket.Delete(k)
+		}); err != nil {
+			return err
+		}
+
+		return versions.ForEach(func(k, _ []byte) error {
+			return versions.Delete(k)
 		})
 	})
 	if err != nil {
@@ -226,8 +327,12 @@ func (s *DiskStore) Size() (int64, error) {
 
 	err := s.handle.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
+		versions := tx.Bucket(s.versionBucket)
 		if bucket == nil {
 			return fmt.Errorf("bucket %s not found", s.bucket)
+		}
+		if versions == nil {
+			return fmt.Errorf("bucket %s not found", s.versionBucket)
 		}
 
 		size = int64(bucket.Stats().KeyN)
@@ -252,8 +357,12 @@ func (s *DiskStore) List(prefix string, limit int64) ([]Entry, error) {
 
 	err := s.handle.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(s.bucket)
+		versions := tx.Bucket(s.versionBucket)
 		if bucket == nil {
 			return fmt.Errorf("bucket %s not found", s.bucket)
+		}
+		if versions == nil {
+			return fmt.Errorf("bucket %s not found", s.versionBucket)
 		}
 
 		var count int64
@@ -271,8 +380,10 @@ func (s *DiskStore) List(prefix string, limit int64) ([]Entry, error) {
 			}
 
 			entries = append(entries, Entry{
-				Key:   key,
-				Value: v,
+				Key:          key,
+				Value:        cloneBytes(v),
+				Versionstamp: string(versions.Get(k)),
+				Found:        true,
 			})
 			count++
 		}
@@ -284,6 +395,139 @@ func (s *DiskStore) List(prefix string, limit int64) ([]Entry, error) {
 	}
 
 	return entries, nil
+}
+
+// AtomicCommit commits checks and mutations as a single atomic operation.
+func (s *DiskStore) AtomicCommit(checks []Check, mutations []Mutation) (CommitResult, error) {
+	if err := s.open(); err != nil {
+		return CommitResult{}, fmt.Errorf("failed to open disk store: %w", err)
+	}
+
+	var result CommitResult
+	err := s.handle.Update(func(tx *bolt.Tx) error {
+		bucket, versions, bucketErr := s.atomicBuckets(tx)
+		if bucketErr != nil {
+			return bucketErr
+		}
+
+		if !checksMatch(versions, checks) {
+			result = CommitResult{Ok: false}
+			return nil
+		}
+
+		versionstamp := formatDiskVersionstamp(tx)
+		if mutationErr := applyDiskMutations(bucket, versions, versionstamp, mutations); mutationErr != nil {
+			return mutationErr
+		}
+		result = CommitResult{Ok: true, Versionstamp: versionstamp}
+
+		return nil
+	})
+	if err != nil {
+		return CommitResult{}, fmt.Errorf("unable to commit atomic operation to disk store: %w", err)
+	}
+
+	return result, nil
+}
+
+func (s *DiskStore) atomicBuckets(tx *bolt.Tx) (*bolt.Bucket, *bolt.Bucket, error) {
+	bucket := tx.Bucket(s.bucket)
+	if bucket == nil {
+		return nil, nil, fmt.Errorf("bucket %s not found", s.bucket)
+	}
+
+	versions := tx.Bucket(s.versionBucket)
+	if versions == nil {
+		return nil, nil, fmt.Errorf("bucket %s not found", s.versionBucket)
+	}
+
+	return bucket, versions, nil
+}
+
+func checksMatch(versions *bolt.Bucket, checks []Check) bool {
+	for _, check := range checks {
+		current := string(versions.Get([]byte(check.Key)))
+		if current != check.Versionstamp {
+			return false
+		}
+	}
+
+	return true
+}
+
+func applyDiskMutations(bucket, versions *bolt.Bucket, versionstamp string, mutations []Mutation) error {
+	for _, mutation := range mutations {
+		if err := applyDiskMutation(bucket, versions, versionstamp, mutation); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func applyDiskMutation(bucket, versions *bolt.Bucket, versionstamp string, mutation Mutation) error {
+	switch mutation.Type {
+	case MutationSet:
+		return setDiskMutation(bucket, versions, versionstamp, mutation)
+	case MutationDelete:
+		return deleteDiskMutation(bucket, versions, mutation.Key)
+	default:
+		return fmt.Errorf("unsupported mutation type: %s", mutation.Type)
+	}
+}
+
+func setDiskMutation(bucket, versions *bolt.Bucket, versionstamp string, mutation Mutation) error {
+	valueBytes, err := bytesFromValue(mutation.Value, "disk store")
+	if err != nil {
+		return err
+	}
+	if err := bucket.Put([]byte(mutation.Key), valueBytes); err != nil {
+		return err
+	}
+
+	return versions.Put([]byte(mutation.Key), []byte(versionstamp))
+}
+
+func deleteDiskMutation(bucket, versions *bolt.Bucket, key string) error {
+	if err := bucket.Delete([]byte(key)); err != nil {
+		return err
+	}
+
+	return versions.Delete([]byte(key))
+}
+
+func formatDiskVersionstamp(tx *bolt.Tx) string {
+	return fmt.Sprintf("%020d", tx.ID())
+}
+
+// backfillVersionstamps assigns a versionstamp to every key written by a
+// pre-versionstamp release. Such keys live in the data bucket with no entry in
+// the versions bucket; left untouched they would read back as absent and an
+// atomic absent-check would match a key that actually holds a value. Keys that
+// already carry a versionstamp are left untouched, so this is a no-op once a
+// store has been migrated.
+func backfillVersionstamps(tx *bolt.Tx, bucket, versions *bolt.Bucket) error {
+	var missing [][]byte
+	err := bucket.ForEach(func(k, _ []byte) error {
+		if versions.Get(k) == nil {
+			// ForEach reuses the key slice across iterations; copy it.
+			missing = append(missing, append([]byte(nil), k...))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	versionstamp := []byte(formatDiskVersionstamp(tx))
+	for _, key := range missing {
+		if err := versions.Put(key, versionstamp); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Close closes the disk store.
