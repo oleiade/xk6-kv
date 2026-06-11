@@ -46,13 +46,20 @@ func (k *KV) Set(key sobek.Value, value sobek.Value) *sobek.Promise {
 			return
 		}
 
-		err := k.store.Set(keyString, exportedValue)
+		result, err := k.store.AtomicCommit(nil, []store.Mutation{{
+			Type:  store.MutationSet,
+			Key:   keyString,
+			Value: exportedValue,
+		}})
 		if err != nil {
 			reject(err)
 			return
 		}
 
-		resolve(value)
+		resolve(map[string]any{
+			"ok":           result.Ok,
+			"versionstamp": result.Versionstamp,
+		})
 	}()
 
 	return promise
@@ -70,15 +77,48 @@ func (k *KV) Get(key sobek.Value) *sobek.Promise {
 			return
 		}
 
-		value, err := k.store.Get(keyString)
+		entry, err := k.store.GetEntry(keyString)
 		if err != nil {
 			reject(err)
 			return
 		}
 
-		// Convert the value to a JavaScript value
-		jsValue := k.vu.Runtime().ToValue(value)
-		resolve(jsValue)
+		resolve(entryFromStore(entry))
+	}()
+
+	return promise
+}
+
+// GetMany returns entries for the given keys in the same order as the input keys.
+func (k *KV) GetMany(keys sobek.Value) *sobek.Promise {
+	promise, resolve, reject := promises.New(k.vu)
+
+	var keyStrings []string
+	if err := k.vu.Runtime().ExportTo(keys, &keyStrings); err != nil {
+		go func() {
+			reject(err)
+		}()
+		return promise
+	}
+
+	go func() {
+		if k.store == nil {
+			reject(NewError(DatabaseNotOpenError, "database is not open"))
+			return
+		}
+
+		entries, err := k.store.GetMany(keyStrings)
+		if err != nil {
+			reject(err)
+			return
+		}
+
+		jsEntries := make([]Entry, len(entries))
+		for i, entry := range entries {
+			jsEntries[i] = entryFromStore(entry)
+		}
+
+		resolve(k.vu.Runtime().ToValue(jsEntries))
 	}()
 
 	return promise
@@ -176,6 +216,13 @@ func (k *KV) Size() *sobek.Promise {
 	return promise
 }
 
+// Atomic creates an atomic operation builder.
+func (k *KV) Atomic() *AtomicOperation {
+	return &AtomicOperation{
+		kv: k,
+	}
+}
+
 // Close closes the KV instance.
 func (k *KV) Close() error {
 	return k.store.Close()
@@ -207,13 +254,10 @@ func (k *KV) List(options sobek.Value) *sobek.Promise {
 			return
 		}
 
-		// Convert entries to ListEntry format for JavaScript
-		jsEntries := make([]ListEntry, len(entries))
+		// Convert entries to Entry format for JavaScript
+		jsEntries := make([]Entry, len(entries))
 		for i, entry := range entries {
-			jsEntries[i] = ListEntry{
-				Key:   entry.Key,
-				Value: entry.Value,
-			}
+			jsEntries[i] = entryFromStore(entry)
 		}
 
 		resolve(k.vu.Runtime().ToValue(jsEntries))
@@ -222,10 +266,88 @@ func (k *KV) List(options sobek.Value) *sobek.Promise {
 	return promise
 }
 
-// ListEntry is a key-value pair returned by KV.List().
-type ListEntry struct {
-	Key   string `json:"key"`
-	Value any    `json:"value"`
+// AtomicOperation is a Deno KV-style optimistic atomic operation builder.
+type AtomicOperation struct {
+	kv        *KV
+	checks    []store.Check
+	mutations []store.Mutation
+	committed bool
+}
+
+// Check adds versionstamp preconditions to the operation.
+func (a *AtomicOperation) Check(checkValues ...sobek.Value) *AtomicOperation {
+	for _, checkValue := range checkValues {
+		a.checks = append(a.checks, importCheck(a.kv.vu.Runtime(), checkValue))
+	}
+
+	return a
+}
+
+// Set adds a set mutation to the operation.
+func (a *AtomicOperation) Set(key sobek.Value, value sobek.Value) *AtomicOperation {
+	a.mutations = append(a.mutations, store.Mutation{
+		Type:  store.MutationSet,
+		Key:   key.String(),
+		Value: value.Export(),
+	})
+
+	return a
+}
+
+// Delete adds a delete mutation to the operation.
+func (a *AtomicOperation) Delete(key sobek.Value) *AtomicOperation {
+	a.mutations = append(a.mutations, store.Mutation{
+		Type: store.MutationDelete,
+		Key:  key.String(),
+	})
+
+	return a
+}
+
+// Commit commits all checks and mutations as a single atomic operation.
+func (a *AtomicOperation) Commit() *sobek.Promise {
+	promise, resolve, reject := promises.New(a.kv.vu)
+
+	if a.committed {
+		go func() {
+			reject(NewError(AtomicOperationError, "atomic operation has already been committed"))
+		}()
+		return promise
+	}
+	a.committed = true
+	checks := append([]store.Check(nil), a.checks...)
+	mutations := append([]store.Mutation(nil), a.mutations...)
+
+	go func() {
+		if a.kv.store == nil {
+			reject(NewError(DatabaseNotOpenError, "database is not open"))
+			return
+		}
+
+		result, err := a.kv.store.AtomicCommit(checks, mutations)
+		if err != nil {
+			reject(err)
+			return
+		}
+		if !result.Ok {
+			resolve(map[string]any{"ok": false})
+			return
+		}
+
+		resolve(map[string]any{
+			"ok":           true,
+			"versionstamp": result.Versionstamp,
+		})
+	}()
+
+	return promise
+}
+
+// Entry is a versioned key-value pair returned by get, getMany, and list.
+type Entry struct {
+	Key          string `json:"key"`
+	Value        any    `json:"value"`
+	Versionstamp any    `json:"versionstamp"`
 }
 
 // ListOptions are the options that can be passed to KV.List().
@@ -260,4 +382,35 @@ func ImportListOptions(rt *sobek.Runtime, options sobek.Value) ListOptions {
 	}
 
 	return listOptions
+}
+
+func entryFromStore(entry store.Entry) Entry {
+	if entry.Versionstamp == "" {
+		return Entry{
+			Key:          entry.Key,
+			Value:        nil,
+			Versionstamp: nil,
+		}
+	}
+
+	return Entry{
+		Key:          entry.Key,
+		Value:        entry.Value,
+		Versionstamp: entry.Versionstamp,
+	}
+}
+
+func importCheck(rt *sobek.Runtime, value sobek.Value) store.Check {
+	obj := value.ToObject(rt)
+	check := store.Check{
+		Key: obj.Get("key").String(),
+	}
+
+	versionstampValue := obj.Get("versionstamp")
+	if common.IsNullish(versionstampValue) {
+		return check
+	}
+
+	check.Versionstamp = versionstampValue.String()
+	return check
 }

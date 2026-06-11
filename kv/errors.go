@@ -28,6 +28,9 @@ const (
 
 	// ValueTooLargeError is emitted when the value is too large.
 	ValueTooLargeError = "ValueTooLargeError"
+
+	// AtomicOperationError is emitted when an atomic operation is used incorrectly.
+	AtomicOperationError = "AtomicOperationError"
 )
 
 // Error represents a custom error emitted by the kv module
