@@ -1,12 +1,15 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // DiskStore is a key-value store that uses a BoltDB database on disk.
@@ -29,6 +32,13 @@ const (
 
 	// DefaultKvVersionBucket is the default bucket name for per-key versionstamps.
 	DefaultKvVersionBucket = "k6_versions"
+
+	// DefaultDiskStoreOpenTimeout is the maximum time to wait for the
+	// BoltDB file lock when opening the database.
+	//
+	// Without a timeout, bbolt.Open blocks indefinitely when another
+	// process already holds an exclusive lock on the database file.
+	DefaultDiskStoreOpenTimeout = 5 * time.Second
 )
 
 // NewDiskStore creates a new DiskStore instance.
@@ -59,8 +69,16 @@ func (s *DiskStore) open() error {
 		return nil
 	}
 
-	handler, err := bolt.Open(s.path, 0o600, nil)
+	handler, err := bolt.Open(s.path, 0o600, &bolt.Options{Timeout: DefaultDiskStoreOpenTimeout})
 	if err != nil {
+		if errors.Is(err, bolterrors.ErrTimeout) {
+			return fmt.Errorf(
+				"failed to open kv store %q: timeout waiting for file lock "+
+					"(another k6 process may be using the same database file)",
+				s.path,
+			)
+		}
+
 		return err
 	}
 
@@ -78,6 +96,9 @@ func (s *DiskStore) open() error {
 		return backfillVersionstamps(tx, bucket, versions)
 	})
 	if err != nil {
+		// Avoid leaking the file handle (and its lock) if the bucket
+		// initialization fails after a successful open.
+		_ = handler.Close()
 		return err
 	}
 

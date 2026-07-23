@@ -52,7 +52,7 @@ The extension is registered once at process start by `register.go`, which calls 
 
 5. **Backends — `kv/store/memory.go` and `kv/store/disk.go`.**
    - `MemoryStore`: `map[string][]byte` behind a `sync.RWMutex`. `Close` is a no-op.
-   - `DiskStore`: BoltDB at `.k6.kv` (constant `DefaultDiskStorePath`), single bucket `"k6"` (note: `bucket` is actually set to `DefaultDiskStorePath`, not `DefaultKvBucket` — see `disk.go:64`). Uses an `atomic.Bool` opened-flag, an `atomic.Int64` refcount, and a `sync.Mutex` to make `open()` idempotent and `Close()` reference-counted. The DB is opened lazily on the first operation, not at construction.
+   - `DiskStore`: BoltDB at `.k6.kv` (constant `DefaultDiskStorePath`), single bucket `"k6"` (constant `DefaultKvBucket`). Uses an `atomic.Bool` opened-flag, an `atomic.Int64` refcount, and a `sync.Mutex` to make `open()` idempotent and `Close()` reference-counted. The DB is opened lazily on the first operation, not at construction. `open()` passes a lock timeout (`DefaultDiskStoreOpenTimeout`, 5s) to `bolt.Open`, so it fails fast with an actionable error instead of hanging when another process already holds the file lock.
 
 6. **`kv/store/serializer.go`.** Two implementations: `JSONSerializer` (default) round-trips through `encoding/json`; `StringSerializer` does raw string passthrough. Pick via the `serialization: "json" | "string"` option on `openKv()`.
 
