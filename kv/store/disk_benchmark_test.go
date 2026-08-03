@@ -1,4 +1,4 @@
-//nolint:forbidigo,errcheck,gosec
+//nolint:forbidigo,errcheck
 package store
 
 import (
@@ -20,7 +20,7 @@ func BenchmarkDiskStore_Get(b *testing.B) {
 	store.path = tempFile.Name()
 
 	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
 		err := store.Set(key, value)
@@ -88,7 +88,7 @@ func BenchmarkDiskStore_Delete(b *testing.B) {
 			store.path = tempFile.Name()
 
 			// Setup: Add data to the store
-			for i := 0; i < size; i++ {
+			for i := range size {
 				key := fmt.Sprintf("key-%d", i)
 				value := fmt.Sprintf("value-%d", i)
 				err := store.Set(key, value)
@@ -134,7 +134,7 @@ func BenchmarkDiskStore_Exists(b *testing.B) {
 	store.path = tempFile.Name()
 
 	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
 		err := store.Set(key, value)
@@ -170,7 +170,7 @@ func BenchmarkDiskStore_List(b *testing.B) {
 	store.path = tempFile.Name()
 
 	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
 		err := store.Set(key, value)
@@ -180,7 +180,7 @@ func BenchmarkDiskStore_List(b *testing.B) {
 	}
 
 	// Add some data with a specific prefix
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		key := fmt.Sprintf("prefix-%d", i)
 		value := fmt.Sprintf("value-%d", i)
 		err := store.Set(key, value)
@@ -236,7 +236,7 @@ func BenchmarkDiskStore_Concurrent(b *testing.B) {
 	store.path = tempFile.Name()
 
 	// Setup: Add some data to the store
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
 		err := store.Set(key, value)

@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 package store
 
@@ -7,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewDiskStore(t *testing.T) {
@@ -481,6 +481,49 @@ func TestDiskStore_RefCount(t *testing.T) {
 	}
 }
 
+// TestDiskStore_OpenLockedFileTimesOut verifies that opening a database file
+// already locked by another handle fails with an actionable timeout error
+// instead of hanging indefinitely.
+func TestDiskStore_OpenLockedFileTimesOut(t *testing.T) {
+	t.Parallel()
+
+	tempFile := setupTempDiskStore(t)
+	defer os.Remove(tempFile) //nolint:errcheck,forbidigo
+
+	// First store acquires the exclusive file lock.
+	first := NewDiskStore()
+	first.path = tempFile
+	if err := first.Set("key", "value"); err != nil {
+		t.Fatalf("Failed to open first store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = first.Close()
+	})
+
+	// A second store on the same file must not hang; it should return a
+	// timeout error within a bounded amount of time.
+	second := NewDiskStore()
+	second.path = tempFile
+
+	done := make(chan error, 1)
+	go func() {
+		done <- second.Set("other", "value")
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			_ = second.Close()
+			t.Fatal("expected an error when opening a locked database file, got nil")
+		}
+		if !strings.Contains(err.Error(), "timeout waiting for file lock") {
+			t.Fatalf("expected a file lock timeout error, got: %v", err)
+		}
+	case <-time.After(DefaultDiskStoreOpenTimeout + 10*time.Second):
+		t.Fatal("opening a locked database file hung instead of timing out")
+	}
+}
+
 // Helper function to set up a temporary disk store for testing
 func setupTempDiskStore(t *testing.T) string {
 	// Create a temporary file
@@ -488,7 +531,7 @@ func setupTempDiskStore(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("Failed to create temporary file: %v", err)
 	}
-	tempFile.Close() //nolint:errcheck,gosec
+	tempFile.Close() //nolint:errcheck
 
 	return tempFile.Name()
 }

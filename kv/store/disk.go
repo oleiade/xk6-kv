@@ -1,12 +1,15 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // DiskStore is a key-value store that uses a BoltDB database on disk.
@@ -25,6 +28,13 @@ const (
 
 	// DefaultKvBucket is the default bucket name for the KV store
 	DefaultKvBucket = "k6"
+
+	// DefaultDiskStoreOpenTimeout is the maximum time to wait for the
+	// BoltDB file lock when opening the database.
+	//
+	// Without a timeout, bbolt.Open blocks indefinitely when another
+	// process already holds an exclusive lock on the database file.
+	DefaultDiskStoreOpenTimeout = 5 * time.Second
 )
 
 // NewDiskStore creates a new DiskStore instance.
@@ -55,13 +65,21 @@ func (s *DiskStore) open() error {
 		return nil
 	}
 
-	handler, err := bolt.Open(s.path, 0o600, nil)
+	handler, err := bolt.Open(s.path, 0o600, &bolt.Options{Timeout: DefaultDiskStoreOpenTimeout})
 	if err != nil {
+		if errors.Is(err, bolterrors.ErrTimeout) {
+			return fmt.Errorf(
+				"failed to open kv store %q: timeout waiting for file lock "+
+					"(another k6 process may be using the same database file)",
+				s.path,
+			)
+		}
+
 		return err
 	}
 
 	err = handler.Update(func(tx *bolt.Tx) error {
-		_, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultDiskStorePath))
+		_, bucketErr := tx.CreateBucketIfNotExists([]byte(DefaultKvBucket))
 		if bucketErr != nil {
 			return fmt.Errorf("failed to create internal bucket: %w", bucketErr)
 		}
@@ -69,11 +87,14 @@ func (s *DiskStore) open() error {
 		return nil
 	})
 	if err != nil {
+		// Avoid leaking the file handle (and its lock) if the bucket
+		// initialization fails after a successful open.
+		_ = handler.Close()
 		return err
 	}
 
 	s.handle = handler
-	s.bucket = []byte(DefaultDiskStorePath)
+	s.bucket = []byte(DefaultKvBucket)
 	s.opened.Store(true)
 	s.refCount.Add(1)
 

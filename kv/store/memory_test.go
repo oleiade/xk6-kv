@@ -295,14 +295,14 @@ func TestMemoryStore_Concurrency(t *testing.T) {
 	// Test concurrent reads and writes
 	go func() {
 		for range 100 {
-			store.Set("key", "value") //nolint:errcheck,gosec
+			store.Set("key", "value") //nolint:errcheck
 		}
 		done <- true
 	}()
 
 	go func() {
 		for range 100 {
-			store.Get("key") //nolint:errcheck,gosec
+			store.Get("key") //nolint:errcheck
 		}
 		done <- true
 	}()
