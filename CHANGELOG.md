@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Security
+
+- Bumped indirect dependency `google.golang.org/grpc` from v1.83.0 to v1.83.2 to address GHSA-vp52-pcj8-j9qc (heap memory exhaustion via HTTP/2 DATA frame fragmentation). Pulls `golang.org/x/net` v0.58.0 and `golang.org/x/text` v0.41.0 transitively; the Go floor stays at 1.25.
+
 ## v1.5.0 - 2026-09-09
 
 ### Changed
