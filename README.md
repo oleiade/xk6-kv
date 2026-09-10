@@ -60,14 +60,14 @@ import { openKv } from "k6/x/kv";
 
 | xk6-kv | k6            | Go     |
 |--------|---------------|--------|
-| v1.5.0 | v2.2.0 and up | 1.25+  |
+| v1.5.x | v2.2.0 and up | 1.25+  |
 | v1.4.0 | v2.1.0 and up | 1.25+  |
 | v1.3.0 | v0.57.0 to v1.x (pre-v2 import path) | 1.23+  |
 
 To pin both versions in a build:
 
 ```bash
-xk6 build v2.2.0 --with github.com/oleiade/xk6-kv@v1.5.0
+xk6 build v2.2.0 --with github.com/oleiade/xk6-kv@v1.5.1
 ```
 
 ## Quickstart
