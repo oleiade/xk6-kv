@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: [1.25.x, 1.27.x]
+        go-version: [1.26.x, 1.27.x]
         platform: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.platform }}
     steps:
@@ -49,7 +49,7 @@ jobs:
         if: matrix.go-version == 'tip'
         uses: actions/setup-go@v5
         with:
-          go-version: 1.25.x
+          go-version: 1.26.x
       - name: Install Go tip
         shell: bash
         if: matrix.go-version == 'tip'
